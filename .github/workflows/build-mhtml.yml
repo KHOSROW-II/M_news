@@ -1,124 +1,109 @@
-name: 🗞️ Live News Builder (HTML)
+name: Live News Aggregator
 
 on:
-  workflow_dispatch:  # اجرای دستی
+  workflow_dispatch:
   schedule:
-    - cron: '*/30 * * * *'  # هر 30 دقیقه یکبار
+    - cron: '*/20 * * * *'
 
 jobs:
-  build-news:
+  build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # اجازه ذخیره خروجی در مخزن
+      contents: write
 
     steps:
-      - name: 📥 Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: 🧹 Create output directory
+      - name: Create output directory
         run: mkdir -p output
 
-      # ============================================================
-      # 📰 1. دریافت اخبار از وب‌سایت‌ها (با متد ساده و قابل اعتماد)
-      # ============================================================
-      - name: 🌐 Fetch website headlines
+      - name: Fetch website headlines
         id: fetch_websites
         run: |
-          # تابع استخراج عنوان از صفحه وب
           get_title() {
             url="$1"
-            # با curl صفحه را گرفته، خط اول تایتل را با حذف تگ‌ها استخراج می‌کند
-            curl -s -L --max-time 10 "$url" | grep -i -m1 '<title>' | sed 's/<[^>]*>//g' | sed 's/&nbsp;/ /g' | cut -c1-100
+            curl -s -L --max-time 15 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" "$url" | grep -i -m1 '<title>' | sed 's/<[^>]*>//g' | sed 's/&nbsp;/ /g' | sed 's/&[a-z]*;//g' | cut -c1-120
           }
 
-          # لیست وبسایت‌ها (نام|آدرس)
-          sites="Fox News|https://foxnews.com
+          echo '[' > websites.json
+          first=true
+
+          sites="Axios|https://axios.com
+          Fox News|https://foxnews.com
           ABC News|https://abcnews.go.com
           CBS News|https://cbsnews.com
           The Jerusalem Post|https://jpost.com
+          Israel Hayom|https://israelhayom.com
+          Channel 14 Israel|https://now14.co.il
+          Army Radio Israel|https://glz.co.il
           Iran International|https://iranintl.com"
 
-          echo "NEWS_JSON='[" > news_data.json
-          first=true
           while IFS='|' read -r name url; do
             echo "Fetching: $name"
             title=$(get_title "$url")
-            if [ -n "$title" ]; then
-              if [ "$first" = true ]; then first=false; else echo "," >> news_data.json; fi
-              echo "{\"source\":\"$name\", \"title\":\"$title\", \"link\":\"$url\", \"time\":\"$(date -u +'%Y-%m-%d %H:%M:%S UTC')\"}" >> news_data.json
-            else
-              echo "  ⚠️ Failed to fetch: $name"
+            if [ -n "$title" ] && [ "$title" != "Just a moment..." ]; then
+              if [ "$first" = true ]; then first=false; else echo ',' >> websites.json; fi
+              echo "{\"source\":\"$name\",\"title\":\"$title\",\"link\":\"$url\",\"time\":\"$(date -u +'%Y-%m-%d %H:%M:%S UTC')\"}" >> websites.json
             fi
-            sleep 1  # احترام به سرور
+            sleep 1
           done <<< "$sites"
-          echo "]" >> news_data.json
-          echo "✅ Website news saved."
+          echo ']' >> websites.json
 
-      # ============================================================
-      # 💬 2. دریافت پست‌های آخر کانال تلگرام (API عمومی)
-      # ============================================================
-      - name: 📡 Fetch Telegram channels
+      - name: Fetch Telegram channels
         id: fetch_telegram
         run: |
-          # تابع دریافت آخرین پیام از کانال عمومی
-          get_telegram_post() {
+          get_telegram() {
             channel="$1"
-            # حذف @ از ابتدای نام کانال
             channel_clean="${channel#@}"
-            # فراخوانی API عمومی برای دریافت آخرین پست
             api_url="https://tg.i-c-a.su/json/${channel_clean}/last"
             response=$(curl -s --max-time 10 "$api_url")
-            # استخراج متن و لینک با jq (در ubuntu نصب است)
-            text=$(echo "$response" | jq -r '.text // .caption // "متن موجود نیست"' | head -c 200)
+            text=$(echo "$response" | jq -r '.text // .caption // "No content available"' | head -c 250 | sed 's/\n/ /g')
             link="https://t.me/${channel_clean}"
-            echo "{\"source\":\"$channel\", \"title\":\"$text\", \"link\":\"$link\", \"time\":\"$(date -u +'%Y-%m-%d %H:%M:%S UTC')\"}"
+            echo "{\"source\":\"$channel\",\"title\":\"$text\",\"link\":\"$link\",\"time\":\"$(date -u +'%Y-%m-%d %H:%M:%S UTC')\"}"
           }
 
-          channels="@VahidOnline @alonews @IranintlTV"
-          echo "TELEGRAM_JSON='[" > telegram_data.json
+          echo '[' > telegram.json
           first=true
-          for ch in $channels; do
+
+          for ch in "@VahidOnline" "@alonews" "@IranintlTV"; do
             echo "Fetching: $ch"
-            post=$(get_telegram_post "$ch")
+            post=$(get_telegram "$ch")
             if [ -n "$post" ] && [ "$post" != "null" ]; then
-              if [ "$first" = true ]; then first=false; else echo "," >> telegram_data.json; fi
-              echo "$post" >> telegram_data.json
-            else
-              echo "  ⚠️ Failed to fetch: $ch"
+              if [ "$first" = true ]; then first=false; else echo ',' >> telegram.json; fi
+              echo "$post" >> telegram.json
             fi
             sleep 1
           done
-          echo "]" >> telegram_data.json
-          echo "✅ Telegram posts saved."
+          echo ']' >> telegram.json
 
-      # ============================================================
-      # 🎨 3. ساخت فایل HTML زیبا و واکنش‌گرا
-      # ============================================================
-      - name: 🏗️ Build HTML page
+      - name: Build HTML page
         run: |
           cat > output/index.html << 'HTMLEOF'
 <!DOCTYPE html>
-<html lang="fa" dir="rtl">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>پایش زنده اخبار | Live News Monitor</title>
+    <title>Live News Monitor</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             padding: 20px;
-            direction: rtl;
         }
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
-            background: rgba(255,255,255,0.95);
+            background: white;
             border-radius: 20px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
             overflow: hidden;
-            backdrop-filter: blur(5px);
         }
         .header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -126,75 +111,95 @@ jobs:
             padding: 30px;
             text-align: center;
         }
-        .header h1 { font-size: 2rem; margin-bottom: 10px; }
-        .header p { opacity: 0.9; font-size: 0.9rem; }
-        .update-time { background: #fee; color: #c00; text-align: center; padding: 8px; font-weight: bold; }
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+        .header p {
+            opacity: 0.9;
+        }
+        .timestamp-bar {
+            background: #2d3748;
+            color: #e2e8f0;
+            text-align: center;
+            padding: 12px;
+            font-size: 0.9rem;
+            font-family: monospace;
+        }
         .section {
-            padding: 20px;
-            border-bottom: 1px solid #e0e0e0;
+            padding: 30px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .section:last-child {
+            border-bottom: none;
         }
         .section h2 {
-            color: #333;
-            border-right: 5px solid #667eea;
-            padding-right: 15px;
+            color: #2d3748;
+            font-size: 1.8rem;
             margin-bottom: 20px;
             display: flex;
             align-items: center;
             gap: 10px;
+            border-left: 4px solid #667eea;
+            padding-left: 15px;
         }
         .news-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
             gap: 20px;
         }
         .card {
-            background: #fff;
+            background: #f7fafc;
             border-radius: 12px;
-            padding: 15px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-            transition: transform 0.2s, box-shadow 0.2s;
-            border: 1px solid #eee;
+            padding: 18px;
+            transition: all 0.3s ease;
+            border: 1px solid #e2e8f0;
         }
         .card:hover {
             transform: translateY(-3px);
-            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            background: white;
         }
         .card-source {
             font-weight: bold;
             color: #667eea;
-            margin-bottom: 8px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px dashed #ddd;
-            padding-bottom: 5px;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #e2e8f0;
         }
         .card-title {
             font-size: 1rem;
-            line-height: 1.4;
-            margin: 10px 0;
+            line-height: 1.5;
+            margin: 12px 0;
         }
         .card-title a {
-            color: #2c3e50;
+            color: #2d3748;
             text-decoration: none;
         }
-        .card-title a:hover { color: #667eea; text-decoration: underline; }
+        .card-title a:hover {
+            color: #667eea;
+            text-decoration: underline;
+        }
         .card-time {
             font-size: 0.7rem;
-            color: #888;
-            margin-top: 8px;
-            text-align: left;
-            direction: ltr;
+            color: #a0aec0;
+            margin-top: 10px;
+            text-align: right;
+            font-family: monospace;
         }
         .footer {
             background: #2d3748;
-            color: #cbd5e0;
+            color: #a0aec0;
             text-align: center;
-            padding: 15px;
+            padding: 20px;
             font-size: 0.8rem;
         }
         @media (max-width: 768px) {
             body { padding: 10px; }
+            .section { padding: 20px; }
             .news-grid { grid-template-columns: 1fr; }
             .header h1 { font-size: 1.5rem; }
         }
@@ -203,115 +208,91 @@ jobs:
 <body>
 <div class="container">
     <div class="header">
-        <h1>📡 پایشگر زنده اخبار جهان</h1>
-        <p>اخبار لحظه‌ای از منابع معتبر و کانال‌های تلگرامی</p>
+        <h1>📡 Live News Aggregator</h1>
+        <p>Real-time headlines from global media & Telegram channels</p>
     </div>
-    <div class="update-time" id="update-timestamp">
-        🔄 زمان بروزرسانی: در حال دریافت...
-    </div>
-
-    <!-- وبسایت‌های خبری -->
-    <div class="section">
-        <h2>🌐 خبرگزاری‌های رسمی</h2>
-        <div class="news-grid" id="websites-news">
-            <!-- داده‌های وبسایت‌ها در اینجا درج می‌شوند -->
-        </div>
+    <div class="timestamp-bar" id="timestamp">
+        Loading...
     </div>
 
-    <!-- کانال‌های تلگرام -->
     <div class="section">
-        <h2>📱 کانال‌های تلگرامی</h2>
-        <div class="news-grid" id="telegram-news">
-            <!-- داده‌های تلگرام در اینجا درج می‌شوند -->
-        </div>
+        <h2>🌐 News Websites</h2>
+        <div class="news-grid" id="websites-news"></div>
     </div>
+
+    <div class="section">
+        <h2>📱 Telegram Channels</h2>
+        <div class="news-grid" id="telegram-news"></div>
+    </div>
+
     <div class="footer">
-        🤖 تولید شده توسط GitHub Actions | Live News Builder
+        Generated by GitHub Actions | Updates every 20 minutes
     </div>
 </div>
 
 <script>
-    // تابع کمکی برای ساخت کارت خبر
     function createCard(source, title, link, time) {
         return `
             <div class="card">
-                <div class="card-source">
-                    <span>📰 ${source}</span>
-                </div>
+                <div class="card-source">📰 ${source}</div>
                 <div class="card-title">
-                    <a href="${link}" target="_blank" rel="noopener noreferrer">${title}</a>
+                    <a href="${link}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>
                 </div>
-                <div class="card-time">⏱️ ${time}</div>
+                <div class="card-time">🕐 ${time}</div>
             </div>
         `;
     }
 
-    // بارگذاری داده‌های وبسایت‌ها
-    try {
-        const websiteData = __WEBSITES_JSON__;
-        const websiteContainer = document.getElementById('websites-news');
-        if(websiteContainer && websiteData.length) {
-            websiteContainer.innerHTML = websiteData.map(item => createCard(item.source, item.title, item.link, item.time)).join('');
-        }
-    } catch(e) { console.warn("Error loading website news", e); }
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
 
-    // بارگذاری داده‌های تلگرام
-    try {
-        const telegramData = __TELEGRAM_JSON__;
-        const telegramContainer = document.getElementById('telegram-news');
-        if(telegramContainer && telegramData.length) {
-            telegramContainer.innerHTML = telegramData.map(item => createCard(item.source, item.title, item.link, item.time)).join('');
-        }
-    } catch(e) { console.warn("Error loading telegram news", e); }
+    const websiteData = __WEBSITES_JSON__;
+    const telegramData = __TELEGRAM_JSON__;
 
-    // نمایش زمان بروزرسانی
-    const updateTimeDiv = document.getElementById('update-timestamp');
-    if(updateTimeDiv) {
-        updateTimeDiv.innerHTML = `🔄 آخرین بروزرسانی: ${new Date().toLocaleString('fa-IR')}`;
+    const websiteContainer = document.getElementById('websites-news');
+    if (websiteContainer && websiteData && websiteData.length) {
+        websiteContainer.innerHTML = websiteData.map(item => createCard(item.source, item.title, item.link, item.time)).join('');
+    }
+
+    const telegramContainer = document.getElementById('telegram-news');
+    if (telegramContainer && telegramData && telegramData.length) {
+        telegramContainer.innerHTML = telegramData.map(item => createCard(item.source, item.title, item.link, item.time)).join('');
+    }
+
+    const timestampDiv = document.getElementById('timestamp');
+    if (timestampDiv) {
+        timestampDiv.innerHTML = `🔄 Last updated: ${new Date().toLocaleString('en-US')} UTC`;
     }
 </script>
 </body>
 </html>
 HTMLEOF
-          echo "✅ HTML template created."
 
-      # ============================================================
-      # 🔄 4. تزریق داده‌های JSON به فایل HTML
-      # ============================================================
-      - name: 💉 Inject live data into HTML
+      - name: Inject JSON data into HTML
         run: |
-          # خواندن داده‌های JSON
-          WEBSITES_JSON=$(cat news_data.json | jq -c '.')
-          TELEGRAM_JSON=$(cat telegram_data.json | jq -c '.')
-
-          # جایگزینی در فایل HTML
+          WEBSITES_JSON=$(cat websites.json | jq -c '.')
+          TELEGRAM_JSON=$(cat telegram.json | jq -c '.')
           sed -i "s|__WEBSITES_JSON__|$WEBSITES_JSON|g" output/index.html
           sed -i "s|__TELEGRAM_JSON__|$TELEGRAM_JSON|g" output/index.html
+          rm websites.json telegram.json
 
-          # حذف فایل‌های موقت
-          rm news_data.json telegram_data.json
-          echo "✅ Data injected into HTML."
-
-      # ============================================================
-      # 📦 5. ذخیره به عنوان MHTML (همان فایل HTML با پسوند .mhtml)
-      # ============================================================
-      - name: 📄 Save as MHTML
+      - name: Save as MHTML
         run: cp output/index.html output/news.mhtml
 
-      # ============================================================
-      # 💾 6. آپلود آرتیفکت و Commit (اختیاری)
-      # ============================================================
-      - name: 💾 Upload artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: live-news-page
+          name: news-aggregator
           path: output/
           retention-days: 7
 
-      - name: 🔁 Commit and push (optional)
+      - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add output/news.mhtml output/index.html || true
-          git diff --cached --quiet || git commit -m "📰 Auto-update news page [skip ci]" && git push
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add output/news.mhtml output/index.html 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "Auto-update news [skip ci]" && git push
         continue-on-error: true
