@@ -1,13 +1,9 @@
-name: M news html builder
+name: Build News MHTML
 
 on:
-  schedule:
-    - cron: '*/30 0-11 * * *'
-    - cron: '*/15 12-23 * * *'
   workflow_dispatch:
-  push:
-    branches: [ main ]
-  pull_request:
+  schedule:
+    - cron: '*/30 * * * *'
 
 jobs:
   build:
@@ -16,60 +12,90 @@ jobs:
       contents: write
     
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
       
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       
-      - name: Cache pip packages
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+      - name: Debug - Show files before install
+        run: |
+          echo "=== Listing files before install ==="
+          ls -la
+          echo "=== Current directory ==="
+          pwd
       
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
+          echo "=== Installed packages ==="
+          pip list
       
-      - name: Create directories
+      - name: Debug - Show files after install
         run: |
-          mkdir -p output backups
+          echo "=== Listing files after install ==="
+          ls -la
+          echo "=== Python version ==="
+          python --version
       
-      - name: Run robust scraper
+      - name: Create output directory
+        run: mkdir -p output backups
+      
+      - name: Run scraper
         id: scraper
-        continue-on-error: true
-        run: python scraper.py
-      
-      - name: Check output
         run: |
+          echo "=== Running scraper.py ==="
+          python scraper.py
+          echo "=== Exit code: $? ==="
+      
+      - name: Check if files were created
+        run: |
+          echo "=== Checking output directory ==="
+          ls -la output/ || echo "output directory is empty"
+          echo "=== Checking for MHTML file ==="
           if [ -f "output/news.mhtml" ]; then
-            echo "✅ MHTML file created successfully"
-            ls -lh output/
+            echo "✅ MHTML file exists!"
+            echo "File size:"
+            ls -lh output/news.mhtml
           else
-            echo "⚠️ MHTML file not found, creating emergency fallback"
-            echo "<html><body><h1>Service Temporarily Unavailable</h1><p>Please check workflow logs.</p></body></html>" > output/news.mhtml
+            echo "❌ MHTML file not found!"
+            echo "Creating emergency file..."
+            echo "<html><body><h1>Error</h1><p>Scraper failed</p></body></html>" > output/news.mhtml
           fi
       
-      - name: Upload artifacts (for debugging)
+      - name: Debug - Show content of index.html (first 10 lines)
+        if: always()
+        run: |
+          if [ -f "output/index.html" ]; then
+            echo "=== First 10 lines of index.html ==="
+            head -10 output/index.html
+          else
+            echo "index.html not found"
+          fi
+      
+      - name: Upload artifact for debugging
         uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
-          name: debug-output
+          name: news-output
           path: |
             output/
             backups/
-            *.log
+          retention-days: 7
       
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add output/news.mhtml output/index.html backups/ || true
-          git diff --cached --quiet || git commit -m "Auto-update news MHTML $(date +'%Y-%m-%d %H:%M:%S') [skip ci]"
-          git push || echo "No changes to push"
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Auto-update news MHTML [skip ci]"
+            git push
+            echo "✅ Changes pushed successfully"
+          fi
         continue-on-error: true
