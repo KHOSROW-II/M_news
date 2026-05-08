@@ -2,8 +2,6 @@ name: Live News Aggregator
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '*/20 * * * *'
 
 jobs:
   build:
@@ -17,43 +15,61 @@ jobs:
       - name: Create output directory
         run: mkdir -p output
 
-      - name: Fetch website headlines
+      - name: Fetch website headlines with debug
         run: |
+          echo "=== DEBUG: Starting website fetch ==="
+          
           get_title() {
             url="$1"
-            curl -s -L --max-time 15 --user-agent "Mozilla/5.0" "$url" | grep -i -m1 '<title>' | sed 's/<[^>]*>//g' | cut -c1-100
+            echo "  Trying: $url" >&2
+            curl -s -L --max-time 10 --user-agent "Mozilla/5.0" "$url" | grep -i -m1 '<title>' | sed 's/<[^>]*>//g' | cut -c1-100
           }
+          
           echo '[' > websites.json
           first=true
-          sites="Axios|https://axios.com
-          Fox News|https://foxnews.com
+          
+          sites="Fox News|https://foxnews.com
           ABC News|https://abcnews.go.com
-          CBS News|https://cbsnews.com
-          The Jerusalem Post|https://jpost.com
-          Iran International|https://iranintl.com"
+          CBS News|https://cbsnews.com"
+          
           while IFS='|' read -r name url; do
             echo "Fetching: $name"
             title=$(get_title "$url")
+            echo "  Got title: $title"
             if [ -n "$title" ]; then
               if [ "$first" = true ]; then first=false; else echo ',' >> websites.json; fi
               echo "{\"source\":\"$name\",\"title\":\"$title\",\"link\":\"$url\",\"time\":\"$(date -u +'%Y-%m-%d %H:%M:%S')\"}" >> websites.json
+            else
+              echo "  ⚠️ No title found for $name"
             fi
+            echo ""
             sleep 1
           done <<< "$sites"
           echo ']' >> websites.json
+          
+          echo "=== DEBUG: websites.json content ==="
+          cat websites.json
+          echo ""
 
-      - name: Fetch Telegram channels
+      - name: Fetch Telegram channels with debug
         run: |
+          echo "=== DEBUG: Starting Telegram fetch ==="
+          
           get_telegram() {
             channel="$1"
             channel_clean="${channel#@}"
             api_url="https://tg.i-c-a.su/json/${channel_clean}/last"
+            echo "  API URL: $api_url" >&2
             response=$(curl -s --max-time 10 "$api_url")
+            echo "  Response length: ${#response}" >&2
             text=$(echo "$response" | jq -r '.text // .caption // "No content"' | head -c 150)
+            echo "  Text: $text" >&2
             echo "{\"source\":\"$channel\",\"title\":\"$text\",\"link\":\"https://t.me/${channel_clean}\",\"time\":\"$(date -u +'%Y-%m-%d %H:%M:%S')\"}"
           }
+          
           echo '[' > telegram.json
           first=true
+          
           for ch in "@VahidOnline" "@alonews" "@IranintlTV"; do
             echo "Fetching: $ch"
             post=$(get_telegram "$ch")
@@ -64,6 +80,10 @@ jobs:
             sleep 1
           done
           echo ']' >> telegram.json
+          
+          echo "=== DEBUG: telegram.json content ==="
+          cat telegram.json
+          echo ""
 
       - name: Create HTML template
         run: |
@@ -104,20 +124,22 @@ jobs:
           <script src="data.js"></script>
           <script>
           function createCard(s,t,l,time){
-            var safeTitle = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            var safeTitle = (t || 'No title').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
             return '<div class="card"><div class="card-source">📰 '+s+'</div><div class="card-title"><a href="'+l+'" target="_blank">'+safeTitle+'</a></div><div class="card-time">🕐 '+time+'</div></div>';
           }
-          var wsDiv=document.getElementById('websites-news');
-          if(wsDiv&&window.websiteData&&window.websiteData.length){
+          if(window.websiteData && window.websiteData.length){
             var html='';
             for(var i=0;i<window.websiteData.length;i++) html+=createCard(window.websiteData[i].source,window.websiteData[i].title,window.websiteData[i].link,window.websiteData[i].time);
-            wsDiv.innerHTML=html;
+            document.getElementById('websites-news').innerHTML=html;
+          } else {
+            document.getElementById('websites-news').innerHTML='<div class="card">No data from websites</div>';
           }
-          var tgDiv=document.getElementById('telegram-news');
-          if(tgDiv&&window.telegramData&&window.telegramData.length){
+          if(window.telegramData && window.telegramData.length){
             var html='';
             for(var i=0;i<window.telegramData.length;i++) html+=createCard(window.telegramData[i].source,window.telegramData[i].title,window.telegramData[i].link,window.telegramData[i].time);
-            tgDiv.innerHTML=html;
+            document.getElementById('telegram-news').innerHTML=html;
+          } else {
+            document.getElementById('telegram-news').innerHTML='<div class="card">No data from Telegram</div>';
           }
           document.getElementById('timestamp').innerHTML='🔄 Last updated: '+new Date().toLocaleString();
           </script>
@@ -129,6 +151,8 @@ jobs:
         run: |
           echo "window.websiteData = $(cat websites.json);" > output/data.js
           echo "window.telegramData = $(cat telegram.json);" >> output/data.js
+          echo "=== DEBUG: data.js content ==="
+          cat output/data.js
           rm websites.json telegram.json
 
       - name: Save as MHTML
@@ -140,11 +164,3 @@ jobs:
           name: news-aggregator
           path: output/
           retention-days: 7
-
-      - name: Commit and push
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add output/ 2>/dev/null || true
-          git diff --cached --quiet || git commit -m "Auto-update news [skip ci]" && git push
-        continue-on-error: true
