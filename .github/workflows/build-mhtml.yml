@@ -65,12 +65,10 @@ jobs:
           done
           echo ']' >> telegram.json
 
-      - name: Generate HTML with jq
+      - name: Create HTML template
         run: |
-          WEBSITES_JSON=$(cat websites.json | jq -c .)
-          TELEGRAM_JSON=$(cat telegram.json | jq -c .)
-
-          echo '<!DOCTYPE html>
+          cat > output/index.html << 'HTML'
+          <!DOCTYPE html>
           <html>
           <head>
           <meta charset="UTF-8">
@@ -103,30 +101,34 @@ jobs:
           <div class="section"><h2>📱 Telegram Channels</h2><div class="grid" id="telegram-news"></div></div>
           <div class="footer">Powered by GitHub Actions | Updates every 20 minutes</div>
           </div>
+          <script src="data.js"></script>
           <script>
-          var websiteData = '"${WEBSITES_JSON}"';
-          var telegramData = '"${TELEGRAM_JSON}"';
           function createCard(s,t,l,time){
             var safeTitle = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-            return '"'"'<div class="card"><div class="card-source">📰 '"'"'+s+'"'"'</div><div class="card-title"><a href="'"'"'+l+'"'"'" target="_blank">'"'"'+safeTitle+'"'"'</a></div><div class="card-time">🕐 '"'"'+time+'"'"'</div></div>'"'"';
+            return '<div class="card"><div class="card-source">📰 '+s+'</div><div class="card-title"><a href="'+l+'" target="_blank">'+safeTitle+'</a></div><div class="card-time">🕐 '+time+'</div></div>';
           }
-          var wsDiv=document.getElementById('"'"'websites-news'"'"');
-          if(wsDiv&&websiteData&&websiteData.length){
-            var html='"'"''"'"';
-            for(var i=0;i<websiteData.length;i++) html+=createCard(websiteData[i].source,websiteData[i].title,websiteData[i].link,websiteData[i].time);
+          var wsDiv=document.getElementById('websites-news');
+          if(wsDiv&&window.websiteData&&window.websiteData.length){
+            var html='';
+            for(var i=0;i<window.websiteData.length;i++) html+=createCard(window.websiteData[i].source,window.websiteData[i].title,window.websiteData[i].link,window.websiteData[i].time);
             wsDiv.innerHTML=html;
           }
-          var tgDiv=document.getElementById('"'"'telegram-news'"'"');
-          if(tgDiv&&telegramData&&telegramData.length){
-            var html='"'"''"'"';
-            for(var i=0;i<telegramData.length;i++) html+=createCard(telegramData[i].source,telegramData[i].title,telegramData[i].link,telegramData[i].time);
+          var tgDiv=document.getElementById('telegram-news');
+          if(tgDiv&&window.telegramData&&window.telegramData.length){
+            var html='';
+            for(var i=0;i<window.telegramData.length;i++) html+=createCard(window.telegramData[i].source,window.telegramData[i].title,window.telegramData[i].link,window.telegramData[i].time);
             tgDiv.innerHTML=html;
           }
-          document.getElementById('"'"'timestamp'"'"').innerHTML='"'"'🔄 Last updated: '"'"'+new Date().toLocaleString();
+          document.getElementById('timestamp').innerHTML='🔄 Last updated: '+new Date().toLocaleString();
           </script>
           </body>
-          </html>' > output/index.html
+          </html>
+          HTML
 
+      - name: Create JavaScript data file
+        run: |
+          echo "window.websiteData = $(cat websites.json);" > output/data.js
+          echo "window.telegramData = $(cat telegram.json);" >> output/data.js
           rm websites.json telegram.json
 
       - name: Save as MHTML
