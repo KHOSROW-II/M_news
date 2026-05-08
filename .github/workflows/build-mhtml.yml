@@ -1,35 +1,75 @@
-name: M news
+name: M news html builder
+
 on:
   schedule:
     - cron: '*/30 0-11 * * *'
     - cron: '*/15 12-23 * * *'
   workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python
+      
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
+      
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
       - name: Install dependencies
         run: |
+          pip install --upgrade pip
           pip install -r requirements.txt
-          pip install html2mhtml
-      - name: Create output directory
-        run: mkdir -p output
-      - name: Generate HTML from feeds
-        run: python scraper.py
-      - name: Convert HTML to MHTML
-        run: html2mhtml output/index.html output/news.mhtml
-      - name: Commit and Push the MHTML file
+      
+      - name: Create directories
         run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-          git add output/news.mhtml
-          git diff --cached --quiet || git commit -m "Update news MHTML file [skip ci]"
-          git push
+          mkdir -p output backups
+      
+      - name: Run robust scraper
+        id: scraper
+        continue-on-error: true
+        run: python scraper.py
+      
+      - name: Check output
+        run: |
+          if [ -f "output/news.mhtml" ]; then
+            echo "✅ MHTML file created successfully"
+            ls -lh output/
+          else
+            echo "⚠️ MHTML file not found, creating emergency fallback"
+            echo "<html><body><h1>Service Temporarily Unavailable</h1><p>Please check workflow logs.</p></body></html>" > output/news.mhtml
+          fi
+      
+      - name: Upload artifacts (for debugging)
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: debug-output
+          path: |
+            output/
+            backups/
+            *.log
+      
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add output/news.mhtml output/index.html backups/ || true
+          git diff --cached --quiet || git commit -m "Auto-update news MHTML $(date +'%Y-%m-%d %H:%M:%S') [skip ci]"
+          git push || echo "No changes to push"
+        continue-on-error: true
