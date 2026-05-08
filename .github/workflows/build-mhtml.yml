@@ -1,22 +1,150 @@
-name: Build News
+name: Live News Aggregator
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '*/20 * * * *'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Create HTML
+
+      - name: Create output directory
+        run: mkdir -p output
+
+      - name: Fetch website headlines
         run: |
-          mkdir -p output
-          echo "<html><body><h1>News</h1><p>Test</p></body></html>" > output/index.html
-          cp output/index.html output/news.mhtml
-          echo "Done"
-      
-      - uses: actions/upload-artifact@v4
+          get_title() {
+            url="$1"
+            curl -s -L --max-time 15 --user-agent "Mozilla/5.0" "$url" | grep -i -m1 '<title>' | sed 's/<[^>]*>//g' | cut -c1-100
+          }
+          echo '[' > websites.json
+          first=true
+          sites="Axios|https://axios.com
+          Fox News|https://foxnews.com
+          ABC News|https://abcnews.go.com
+          CBS News|https://cbsnews.com
+          The Jerusalem Post|https://jpost.com
+          Iran International|https://iranintl.com"
+          while IFS='|' read -r name url; do
+            echo "Fetching: $name"
+            title=$(get_title "$url")
+            if [ -n "$title" ]; then
+              if [ "$first" = true ]; then first=false; else echo ',' >> websites.json; fi
+              echo "{\"source\":\"$name\",\"title\":\"$title\",\"link\":\"$url\",\"time\":\"$(date -u +'%Y-%m-%d %H:%M:%S')\"}" >> websites.json
+            fi
+            sleep 1
+          done <<< "$sites"
+          echo ']' >> websites.json
+
+      - name: Fetch Telegram channels
+        run: |
+          get_telegram() {
+            channel="$1"
+            channel_clean="${channel#@}"
+            api_url="https://tg.i-c-a.su/json/${channel_clean}/last"
+            response=$(curl -s --max-time 10 "$api_url")
+            text=$(echo "$response" | jq -r '.text // .caption // "No content"' | head -c 150)
+            echo "{\"source\":\"$channel\",\"title\":\"$text\",\"link\":\"https://t.me/${channel_clean}\",\"time\":\"$(date -u +'%Y-%m-%d %H:%M:%S')\"}"
+          }
+          echo '[' > telegram.json
+          first=true
+          for ch in "@VahidOnline" "@alonews" "@IranintlTV"; do
+            echo "Fetching: $ch"
+            post=$(get_telegram "$ch")
+            if [ -n "$post" ]; then
+              if [ "$first" = true ]; then first=false; else echo ',' >> telegram.json; fi
+              echo "$post" >> telegram.json
+            fi
+            sleep 1
+          done
+          echo ']' >> telegram.json
+
+      - name: Generate HTML
+        run: |
+          WEBSITES_JSON=$(cat websites.json)
+          TELEGRAM_JSON=$(cat telegram.json)
+          cat > output/index.html <<- 'HTMLEND'
+          <!DOCTYPE html>
+          <html>
+          <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Live News Monitor</title>
+          <style>
+          body{font-family:Arial,sans-serif;background:#f0f0f0;margin:0;padding:20px}
+          .container{max-width:1200px;margin:0 auto;background:white;border-radius:10px}
+          .header{background:#1a1a2e;color:white;padding:20px;text-align:center}
+          .header h1{margin:0}
+          .timebar{background:#2d3748;color:#e2e8f0;text-align:center;padding:10px}
+          .section{padding:20px}
+          .section h2{color:#333;margin-top:0}
+          .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:15px}
+          .card{background:#f9f9f9;border-radius:8px;padding:15px;border:1px solid #ddd}
+          .card-source{color:#667eea;font-weight:bold;font-size:12px}
+          .card-title{margin:10px 0}
+          .card-title a{color:#333;text-decoration:none}
+          .card-title a:hover{color:#667eea}
+          .card-time{color:#999;font-size:11px;text-align:right}
+          .footer{background:#2d3748;color:#a0aec0;text-align:center;padding:15px;font-size:12px}
+          @media (max-width:600px){body{padding:10px}.grid{grid-template-columns:1fr}}
+          </style>
+          </head>
+          <body>
+          <div class="container">
+          <div class="header"><h1>📡 Live News Aggregator</h1><p>Real-time headlines from global media</p></div>
+          <div class="timebar" id="timestamp">Loading...</div>
+          <div class="section"><h2>🌐 News Websites</h2><div class="grid" id="websites-news"></div></div>
+          <div class="section"><h2>📱 Telegram Channels</h2><div class="grid" id="telegram-news"></div></div>
+          <div class="footer">Powered by GitHub Actions | Updates every 20 minutes</div>
+          </div>
+          <script>
+          var websiteData = WEBSITES_PLACEHOLDER;
+          var telegramData = TELEGRAM_PLACEHOLDER;
+          function createCard(s,t,l,time){
+            var safeTitle = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            return '<div class="card"><div class="card-source">📰 '+s+'</div><div class="card-title"><a href="'+l+'" target="_blank">'+safeTitle+'</a></div><div class="card-time">🕐 '+time+'</div></div>';
+          }
+          var wsDiv=document.getElementById('websites-news');
+          if(wsDiv&&websiteData&&websiteData.length){
+            var html='';
+            for(var i=0;i<websiteData.length;i++) html+=createCard(websiteData[i].source,websiteData[i].title,websiteData[i].link,websiteData[i].time);
+            wsDiv.innerHTML=html;
+          }
+          var tgDiv=document.getElementById('telegram-news');
+          if(tgDiv&&telegramData&&telegramData.length){
+            var html='';
+            for(var i=0;i<telegramData.length;i++) html+=createCard(telegramData[i].source,telegramData[i].title,telegramData[i].link,telegramData[i].time);
+            tgDiv.innerHTML=html;
+          }
+          document.getElementById('timestamp').innerHTML='🔄 Last updated: '+new Date().toLocaleString();
+          </script>
+          </body>
+          </html>
+          HTMLEND
+          sed -i "s|WEBSITES_PLACEHOLDER|$WEBSITES_JSON|g" output/index.html
+          sed -i "s|TELEGRAM_PLACEHOLDER|$TELEGRAM_JSON|g" output/index.html
+          rm websites.json telegram.json
+
+      - name: Save as MHTML
+        run: cp output/index.html output/news.mhtml
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: output
+          name: news-aggregator
           path: output/
+          retention-days: 7
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add output/ 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "Auto-update news [skip ci]" && git push
+        continue-on-error: true
