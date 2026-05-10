@@ -2,11 +2,13 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
+// اطمینان از وجود پوشه output
 const outputDir = path.join(__dirname, '..', 'output');
 if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
 }
 
+// تابع fetch با timeout
 function fetchUrl(url, retries = 2) {
     return new Promise((resolve, reject) => {
         const fetchWithRetry = (attempt) => {
@@ -16,9 +18,7 @@ function fetchUrl(url, retries = 2) {
                 path: urlObj.pathname + urlObj.search,
                 method: 'GET',
                 headers: {
-                    'User-Agent': 'Mozilla/5.0 (compatible; NewsBot/1.0)',
-                    'Accept': 'text/html,application/xhtml+xml',
-                    'Accept-Language': 'en-US,en;q=0.9'
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                 },
                 timeout: 15000
             };
@@ -52,6 +52,7 @@ function fetchUrl(url, retries = 2) {
     });
 }
 
+// استخراج اخبار از C14
 async function fetchC14() {
     console.log('📡 Fetching from C14...');
     const news = [];
@@ -59,46 +60,29 @@ async function fetchC14() {
     try {
         const html = await fetchUrl('https://www.c14.co.il');
         
-        const patterns = [
-            /<h[1-3][^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/h[1-3]>/gi,
-            /<a[^>]*class="[^"]*headline[^"]*"[^>]*>([^<]+)<\/a>/gi,
-            /<div[^>]*class="[^"]*news-title[^"]*"[^>]*>([^<]+)<\/div>/gi
-        ];
+        // استخراج تیترها با الگوهای مختلف
+        const titleMatches = html.match(/<h[1-3][^>]*>([^<]+)<\/h[1-3]>/gi) || [];
+        const titles = [...new Set(titleMatches.map(m => m.replace(/<[^>]*>/g, '').trim()))];
         
-        let allMatches = [];
-        for (const pattern of patterns) {
-            const matches = [...html.matchAll(pattern)];
-            allMatches.push(...matches);
-        }
-        
-        const uniqueTitles = [...new Set(allMatches.map(m => m[1].trim()))];
-        
-        for (let i = 0; i < Math.min(8, uniqueTitles.length); i++) {
-            let title = uniqueTitles[i]
-                .replace(/<[^>]*>/g, '')
-                .replace(/&[a-z]+;/g, ' ')
-                .replace(/\s+/g, ' ')
-                .trim();
-            
-            if (title && title.length > 5 && title.length < 200) {
+        for (let i = 0; i < Math.min(5, titles.length); i++) {
+            if (titles[i] && titles[i].length > 3) {
                 news.push({
                     id: `c14-${Date.now()}-${i}`,
                     sourceId: 'c14',
-                    sourceName: 'C14 (اسرائیل)',
-                    originalTitle: title,
-                    title: title,
-                    originalSummary: title.substring(0, 150),
-                    summary: title.substring(0, 150),
+                    sourceName: 'C14',
+                    originalTitle: titles[i],
+                    title: titles[i],
+                    originalSummary: titles[i].substring(0, 150),
+                    summary: titles[i].substring(0, 150),
                     link: 'https://www.c14.co.il',
                     pubDate: new Date().toISOString(),
-                    originalLang: 'he',  // عبری
-                    translated: false,
+                    originalLang: 'he',
                     needsTranslation: true
                 });
             }
         }
         
-        console.log(`✅ C14: ${news.length} news found`);
+        console.log(`✅ C14: ${news.length} news`);
     } catch (err) {
         console.error(`❌ C14 error: ${err.message}`);
     }
@@ -106,6 +90,7 @@ async function fetchC14() {
     return news;
 }
 
+// استخراج از ایران اینترنشنال
 async function fetchIranIntl() {
     console.log('📡 Fetching from Iran International...');
     const news = [];
@@ -113,35 +98,28 @@ async function fetchIranIntl() {
     try {
         const html = await fetchUrl('https://www.iranintl.com/fa/latest');
         
-        const titleRegex = /<h[2-4][^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/h[2-4]>/gi;
-        const summaryRegex = /<p[^>]*class="[^"]*summary[^"]*"[^>]*>([^<]+)<\/p>/gi;
+        const titleMatches = html.match(/<h[2-4][^>]*>([^<]+)<\/h[2-4]>/gi) || [];
+        const titles = titleMatches.map(m => m.replace(/<[^>]*>/g, '').trim());
         
-        const titles = [...html.matchAll(titleRegex)].map(m => m[1].trim());
-        const summaries = [...html.matchAll(summaryRegex)].map(m => m[1].trim());
-        
-        for (let i = 0; i < Math.min(10, titles.length); i++) {
-            const title = titles[i].replace(/<[^>]*>/g, '').trim();
-            const summary = summaries[i]?.replace(/<[^>]*>/g, '').trim() || title;
-            
-            if (title && title.length > 3) {
+        for (let i = 0; i < Math.min(8, titles.length); i++) {
+            if (titles[i] && titles[i].length > 3) {
                 news.push({
                     id: `iran-${Date.now()}-${i}`,
                     sourceId: 'iranintl',
                     sourceName: 'ایران اینترنشنال',
-                    originalTitle: title,
-                    title: title,
-                    originalSummary: summary.substring(0, 200),
-                    summary: summary.substring(0, 200),
+                    originalTitle: titles[i],
+                    title: titles[i],
+                    originalSummary: titles[i].substring(0, 200),
+                    summary: titles[i].substring(0, 200),
                     link: 'https://www.iranintl.com/fa/latest',
                     pubDate: new Date().toISOString(),
                     originalLang: 'fa',
-                    translated: false,
                     needsTranslation: false
                 });
             }
         }
         
-        console.log(`✅ IranIntl: ${news.length} news found`);
+        console.log(`✅ IranIntl: ${news.length} news`);
     } catch (err) {
         console.error(`❌ IranIntl error: ${err.message}`);
     }
@@ -149,6 +127,7 @@ async function fetchIranIntl() {
     return news;
 }
 
+// استخراج از سایت رضا پهلوی
 async function fetchRezaPahlavi() {
     console.log('📡 Fetching from Reza Pahlavi...');
     const news = [];
@@ -157,32 +136,28 @@ async function fetchRezaPahlavi() {
         const html = await fetchUrl('https://rezapahlavi.org/en');
         
         const titleMatch = html.match(/<h1[^>]*>([^<]+)<\/h1>/i);
-        const paragraphs = [...html.matchAll(/<p[^>]*>([^<]+)<\/p>/gi)];
+        const h2Matches = html.match(/<h2[^>]*>([^<]+)<\/h2>/gi) || [];
         
         if (titleMatch) {
             const title = titleMatch[1].trim();
-            const summary = paragraphs.length > 0 ? paragraphs[0][1].trim() : title;
-            
             news.push({
                 id: `reza-${Date.now()}-0`,
                 sourceId: 'rezapahlavi',
                 sourceName: 'رضا پهلوی',
                 originalTitle: title,
                 title: title,
-                originalSummary: summary.substring(0, 250),
-                summary: summary.substring(0, 250),
+                originalSummary: title.substring(0, 200),
+                summary: title.substring(0, 200),
                 link: 'https://rezapahlavi.org/en',
                 pubDate: new Date().toISOString(),
                 originalLang: 'en',
-                translated: false,
                 needsTranslation: true
             });
         }
         
-        const h2Matches = [...html.matchAll(/<h2[^>]*>([^<]+)<\/h2>/gi)];
         for (let i = 0; i < Math.min(3, h2Matches.length); i++) {
-            const title = h2Matches[i][1].trim();
-            if (title && !title.includes('Event')) {
+            const title = h2Matches[i].replace(/<[^>]*>/g, '').trim();
+            if (title && title.length > 3) {
                 news.push({
                     id: `reza-${Date.now()}-${i+1}`,
                     sourceId: 'rezapahlavi',
@@ -194,13 +169,12 @@ async function fetchRezaPahlavi() {
                     link: 'https://rezapahlavi.org/en',
                     pubDate: new Date().toISOString(),
                     originalLang: 'en',
-                    translated: false,
                     needsTranslation: true
                 });
             }
         }
         
-        console.log(`✅ RezaPahlavi: ${news.length} news found`);
+        console.log(`✅ RezaPahlavi: ${news.length} news`);
     } catch (err) {
         console.error(`❌ RezaPahlavi error: ${err.message}`);
     }
@@ -208,6 +182,7 @@ async function fetchRezaPahlavi() {
     return news;
 }
 
+// تابع اصلی
 async function main() {
     console.log('🚀 Starting news aggregation:', new Date().toISOString());
     
@@ -233,9 +208,9 @@ async function main() {
         }
     };
     
-    const tempPath = path.join(outputDir, 'news-data-temp.json');
-    fs.writeFileSync(tempPath, JSON.stringify(output, null, 2));
-    console.log(`💾 Temporary data saved: ${allNews.length} items`);
+    const outputPath = path.join(outputDir, 'news-data-temp.json');
+    fs.writeFileSync(outputPath, JSON.stringify(output, null, 2));
+    console.log(`💾 Saved ${allNews.length} news items to temp file`);
 }
 
 main().catch(console.error);
