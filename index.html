@@ -2,62 +2,32 @@
 <html lang="fa" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>📰 خبرخوان هوشمند | جمع‌آوری خودکار اخبار</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📰 خبرخوان خودکار | ترجمه هوشمند</title>
     <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="container">
-        <header class="glass-header">
-            <div class="header-top">
-                <h1 class="logo">
-                    <span class="icon">📡</span>
-                    خبرخوان هوشمند
-                    <span class="badge">Beta</span>
-                </h1>
-                <button id="refreshBtn" class="refresh-btn" title="بروزرسانی دستی">
-                    🔄 {{lastUpdate}}
-                </button>
-            </div>
-            
-            <div class="search-filter">
-                <div class="search-box">
-                    <input type="text" id="searchInput" placeholder="جستجوی خبر ...">
-                    <span class="search-icon">🔍</span>
-                </div>
-                <div class="source-filters" id="sourceFilters"></div>
-            </div>
-            
-            <div class="stats-bar">
-                <span>📊 <span id="totalCount">0</span> خبر</span>
-                <span>🌍 <span id="translatedCount">0</span> خبر ترجمه شده</span>
-                <span>🕒 آخرین بروزرسانی: <span id="lastFetchTime">--</span></span>
-            </div>
+    <div class="app">
+        <header>
+            <h1>📡 خبرخوان چندمنبعی</h1>
+            <p>جمع‌آوری خودکار از ۳ منبع + ترجمه واقعی غیرفارسی</p>
+            <div class="status" id="status"></div>
         </header>
-
-        <main class="news-grid" id="newsGrid">
-            <div class="loading-skeleton">
-                <div class="card-skeleton"></div>
-                <div class="card-skeleton"></div>
-                <div class="card-skeleton"></div>
-                <div class="card-skeleton"></div>
-            </div>
-        </main>
-
+        
+        <div class="controls">
+            <input type="text" id="search" placeholder="جستجو در اخبار..." class="search-input">
+            <div class="filters" id="filters"></div>
+        </div>
+        
+        <div class="news-container" id="newsContainer">
+            <div class="loading">در حال بارگذاری...</div>
+        </div>
+        
         <footer>
-            <p>⚠️ برخی اخبار با استفاده از <strong>ترجمه ماشینی</strong> به فارسی برگردانده شده‌اند.</p>
-            <p>منابع: C14 | ایران اینترنشنال | رضا پهلوی</p>
+            <p>⚠️ اخبار با 🌐 مشخص شده‌اند با <strong>ترجمه ماشینی</strong> برگردانده شده‌اند</p>
+            <p>منابع: C14 (عبری) | ایران اینترنشنال (فارسی) | رضا پهلوی (انگلیسی)</p>
         </footer>
     </div>
-
-    <div id="newsModal" class="modal">
-        <div class="modal-content">
-            <span class="close-modal">&times;</span>
-            <div id="modalBody"></div>
-        </div>
-    </div>
-
     <script src="script.js"></script>
 </body>
 </html>
