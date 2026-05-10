@@ -8,6 +8,9 @@ on:
     branches: [ main ]
     paths:
       - 'scripts/**'
+      
+permissions:
+  contents: write
 
 jobs:
   aggregate-news:
