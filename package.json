@@ -1,10 +1,13 @@
 {
-  "name": "news-aggregator",
-  "version": "1.0.0",
-  "description": "Multi-source news aggregator with auto-translation",
-  "main": "fetch-news.js",
+  "name": "news-aggregator-workflow",
+  "version": "2.0.0",
+  "description": "GitHub Actions based news aggregator with real translation",
   "scripts": {
-    "fetch": "node fetch-news.js"
+    "fetch": "node scripts/fetch-news.js",
+    "translate": "node scripts/translate-service.js",
+    "full": "npm run fetch && npm run translate"
   },
-  "dependencies": {}
+  "engines": {
+    "node": ">=20.0.0"
+  }
 }
