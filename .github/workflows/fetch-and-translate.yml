@@ -1,66 +1,76 @@
-name: 📰 News Aggregator with Real Translation
+name: 📰 News Aggregator
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '0 */2 * * *'  # هر 2 ساعت یکبار (کاهش مصرف)
   workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'scripts/**'
 
 jobs:
-  fetch-and-translate:
+  aggregate-news:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     
     steps:
-      - name: 🔄 Checkout Repository
+      - name: 📥 Checkout code
         uses: actions/checkout@v4
       
       - name: 🟢 Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
+          # بدون کش کردن
       
-      - name: 📦 Install Dependencies
-        run: npm ci
-      
-      - name: 🗑️ Clean Old Output (Optional)
+      - name: 📦 Install dependencies (if any)
         run: |
-          mkdir -p output
-          rm -f output/news-data.json
+          if [ -f "package.json" ]; then
+            npm install --no-package-lock
+          else
+            echo "No dependencies needed"
+          fi
       
-      - name: 🌐 Fetch News from All Sources
+      - name: 📁 Create output directory
+        run: mkdir -p output
+      
+      - name: 🌐 Fetch news from all sources
         run: node scripts/fetch-news.js
-        env:
-          NODE_NO_WARNINGS: 1
+        continue-on-error: false
       
-      - name: 🤖 Translate Non-Persian Content
+      - name: 🤖 Translate to Persian
         run: node scripts/translate-service.js
         env:
           TRANSLATE_API_URL: "https://translate.argosopentech.com"
-          TRANSLATE_CONCURRENCY: "3"
+          TRANSLATE_CONCURRENCY: "2"
+        continue-on-error: true  # اگر ترجمه failed باشه، کل workflow متوقف نشه
       
-      - name: 📊 Generate Statistics
+      - name: 📊 Generate report
         run: |
-          echo "## 📊 گزارش خبرهای $(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| معیار | مقدار |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| کل اخبار | $(jq '.news | length' output/news-data.json) |" >> $GITHUB_STEP_SUMMARY
-          echo "| اخبار ترجمه شده | $(jq '[.news[] | select(.translated == true)] | length' output/news-data.json) |" >> $GITHUB_STEP_SUMMARY
-          echo "| زبان‌های مبدأ | $(jq '[.news[].originalLang] | unique | join(", ")' output/news-data.json) |" >> $GITHUB_STEP_SUMMARY
+          if [ -f "output/news-data.json" ]; then
+            echo "## 📊 News Report" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Total News | $(jq '.totalNews // .news | length' output/news-data.json 2>/dev/null || echo 'N/A') |" >> $GITHUB_STEP_SUMMARY
+            echo "| Last Updated | $(date '+%Y-%m-%d %H:%M:%S') |" >> $GITHUB_STEP_SUMMARY
+          fi
       
-      - name: 💾 Commit and Push Results
+      - name: 💾 Save and commit
         run: |
-          git config --local user.name "github-actions[bot]"
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git add output/news-data.json
-          git diff --staged --quiet || git commit -m "🤖 Auto-update news $(date '+%Y-%m-%d %H:%M:%S')"
-          git push
-        continue-on-error: true
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add output/news-data.json || true
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update news $(date '+%Y%m%d-%H%M%S')"
+            git push
+          fi
       
-      - name: ✅ Upload Artifact (برای مشاهده آنی)
+      - name: 📤 Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: news-data
-          path: output/news-data.json
-          retention-days: 7
+          name: news-data-$(date '+%Y%m%d-%H%M%S')
+          path: output/
+          retention-days: 3
