@@ -16,6 +16,13 @@ jobs:
     steps:
       - name: 📥 Checkout code
         uses: actions/checkout@v4
+
+      - name: 📂 Debug - List all files
+        run: |
+          pwd
+          ls -la
+          ls -la scripts/ || echo "scripts folder not found"
+          find . -name "*.js" -type f
       
       - name: 🟢 Setup Node.js
         uses: actions/setup-node@v4
