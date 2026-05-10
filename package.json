@@ -1,0 +1,10 @@
+{
+  "name": "news-aggregator",
+  "version": "1.0.0",
+  "description": "Multi-source news aggregator with auto-translation",
+  "main": "fetch-news.js",
+  "scripts": {
+    "fetch": "node fetch-news.js"
+  },
+  "dependencies": {}
+}
