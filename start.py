@@ -3,13 +3,12 @@
 News Aggregator desktop launcher.
 
 Bundled as start.exe via PyInstaller on Windows.
-On Linux, requires pywebview[qt] (with software rendering) or falls back to browser.
+Fetches latest data from GitHub only when it changed.
 """
 
 import os
 import sys
 
-# --- Qt/Chromium env vars MUST be set before importing webview ----------
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS",
                       "--disable-gpu --no-sandbox --disable-dev-shm-usage --disable-software-rasterizer")
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
@@ -49,12 +48,13 @@ CACHE_DATA = CACHE_DIR / "news-data.json"
 CACHE_ARCHIVE = CACHE_DIR / "archive.json"
 CACHE_IMAGES = CACHE_DIR / "images"
 CACHE_IMAGES.mkdir(parents=True, exist_ok=True)
+LOG_FILE = CACHE_DIR / "start.log"
 
 # ---- config -------------------------------------------------------------
 HOST = "127.0.0.1"
 RAW_BASE = os.environ.get(
     "NEWS_RAW_BASE",
-    "https://raw.githubusercontent.com/USER/REPO/main/output",
+    "https://raw.githubusercontent.com/KHOSROW-II/M_news/main/output",
 ).rstrip("/")
 RAW_NEWS_URL = RAW_BASE + "/news-data.json"
 RAW_ARCHIVE_URL = RAW_BASE + "/archive.json"
@@ -63,123 +63,202 @@ HTTP_TIMEOUT = 15
 
 _refresh_lock = threading.Lock()
 _last_refresh = {"ok": False, "message": "not started", "count": 0, "ts": 0}
+_log_file = None
+
+# ---- logging ------------------------------------------------------------
+def open_log():
+    global _log_file
+    try:
+        _log_file = open(LOG_FILE, "a", encoding="utf-8")
+        _log_file.write(f"\n\n=== start {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+        _log_file.flush()
+    except Exception:
+        _log_file = None
+
+def log(msg, level="info"):
+    line = f"[{time.strftime('%H:%M:%S')}] {level}: {msg}"
+    if _log_file:
+        try:
+            _log_file.write(line + "\n")
+            _log_file.flush()
+        except Exception:
+            pass
+    if not FROZEN or "--console" in sys.argv:
+        prefix = {"info": "  ", "ok": "[+]", "warn": "[!]", "err": "[x]"}.get(level, "  ")
+        print(f"{prefix} {msg}", flush=True)
+
+# ---- splash -------------------------------------------------------------
+class Splash:
+    def __init__(self):
+        self.root = None
+        self.status = None
+        self.available = False
+        try:
+            import tkinter as tk
+            from tkinter import ttk
+
+            self.tk = tk
+            root = tk.Tk()
+            root.overrideredirect(True)
+            root.attributes("-topmost", True)
+            root.configure(bg="#111827")
+
+            w, h = 420, 220
+            sw = root.winfo_screenwidth()
+            sh = root.winfo_screenheight()
+            root.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+
+            tk.Label(root, text="NEWS", fg="#6b7280", bg="#111827",
+                     font=("Segoe UI", 9, "bold")).pack(pady=(36, 0))
+            tk.Label(root, text="Aggregator", fg="#ffffff", bg="#111827",
+                     font=("Segoe UI", 22, "bold")).pack()
+            self.status = tk.Label(root, text="Starting...", fg="#9ca3af", bg="#111827",
+                                   font=("Segoe UI", 9))
+            self.status.pack(pady=(18, 8))
+            bar = ttk.Progressbar(root, length=320, mode="indeterminate")
+            bar.pack()
+            bar.start(12)
+
+            self.root = root
+            self.root.update()
+            self.available = True
+        except Exception as exc:
+            log(f"splash unavailable: {exc}", "warn")
+            self.available = False
+
+    def update(self, text):
+        if not self.available:
+            return
+        try:
+            self.status.config(text=text)
+            self.root.update()
+        except Exception:
+            pass
+
+    def close(self):
+        if not self.available:
+            return
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+        self.available = False
 
 # ---- noise filter -------------------------------------------------------
 _NOISE_PATTERNS = [
-    "GTK cannot be loaded",
-    "QT cannot be loaded",
-    "No module named 'gi'",
-    "No module named 'qtpy'",
-    "import webview.platforms.gtk",
-    "import webview.platforms.qt",
-    "webview/platforms/gtk.py",
-    "webview/platforms/qt.py",
-    "webview/guilib.py",
-    "Sandboxing disabled by user",
-    "vkDebug:",
-    "EGL: Failed to query DRM",
-    "GPUInfo not initialized",
-    "Release of profile requested but WebEnginePage still not deleted",
-    "Expect troubles !",
+    "GTK cannot be loaded", "QT cannot be loaded",
+    "No module named 'gi'", "No module named 'qtpy'",
+    "webview/platforms/gtk.py", "webview/platforms/qt.py",
+    "webview/guilib.py", "Sandboxing disabled by user",
+    "vkDebug:", "EGL: Failed to query DRM", "GPUInfo not initialized",
+    "Release of profile requested", "Expect troubles !",
 ]
-
 
 class _NoiseFilter(io.TextIOBase):
     def __init__(self, target):
         self.target = target
-
     def write(self, s):
         for line in s.splitlines(keepends=True):
-            stripped = line.strip()
-            if not stripped:
+            st = line.strip()
+            if not st:
                 self.target.write(line)
                 continue
-            if any(p in stripped for p in _NOISE_PATTERNS):
+            if any(p in st for p in _NOISE_PATTERNS):
                 continue
-            if stripped.startswith('File "') and "site-packages/webview/" in stripped:
-                continue
-            if stripped.startswith("Traceback (most recent call last)"):
-                continue
-            if stripped.startswith('import ') or stripped.startswith('from '):
-                continue
-            if set(stripped) <= set("^~ "):
+            if st.startswith('File "') and "site-packages/webview/" in st:
                 continue
             self.target.write(line)
         return len(s)
-
     def flush(self):
-        try:
-            self.target.flush()
-        except Exception:
-            pass
-
+        try: self.target.flush()
+        except Exception: pass
 
 @contextlib.contextmanager
-def quiet_webview(verbose=False):
-    if verbose:
-        yield
-        return
-    old_stderr = sys.stderr
-    sys.stderr = _NoiseFilter(old_stderr)
+def quiet_stderr():
+    old = sys.stderr
+    sys.stderr = _NoiseFilter(old)
     try:
         yield
     finally:
-        sys.stderr = old_stderr
+        sys.stderr = old
 
-
-# ---- logging ------------------------------------------------------------
-def log(msg, level="info"):
-    prefix = {"info": "  ", "ok": "[+]", "warn": "[!]", "err": "[x]"}.get(level, "  ")
-    print(f"{prefix} {msg}", flush=True)
-
-
-def progress(duration, label):
-    if not sys.stdout.isatty():
-        print(f"  {label}...", flush=True)
-        time.sleep(duration)
-        return
-    steps = 28
-    for i in range(steps + 1):
-        pct = int(100 * i / steps)
-        filled = int(28 * i / steps)
-        bar = "=" * filled + "-" * (28 - filled)
-        sys.stdout.write(f"\r  {label} [{bar}] {pct:3d}%")
-        sys.stdout.flush()
-        time.sleep(duration / steps)
-    sys.stdout.write("\n")
-    sys.stdout.flush()
-
-
-# ---- remote fetch -------------------------------------------------------
+# ---- http ---------------------------------------------------------------
 def _http_get(url, timeout=HTTP_TIMEOUT):
     req = urllib.request.Request(url, headers={"User-Agent": "NewsAggregator/4.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
+def _http_head(url, timeout=10):
+    req = urllib.request.Request(url, method="HEAD",
+                                 headers={"User-Agent": "NewsAggregator/4.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return {
+                "ok": True,
+                "content_length": resp.headers.get("Content-Length"),
+                "last_modified": resp.headers.get("Last-Modified"),
+            }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
-def do_fetch():
+# ---- fetch --------------------------------------------------------------
+def do_fetch(offline=False):
     global _last_refresh
-
+    if offline:
+        _last_refresh = {"ok": False, "message": "offline mode", "count": 0, "ts": time.time()}
+        return False, "offline mode"
     if "USER/REPO" in RAW_BASE:
         _last_refresh = {"ok": False, "message": "URL not configured", "count": 0, "ts": time.time()}
         return False, "URL not configured"
 
     with _refresh_lock:
         try:
+            # 1) HEAD check to avoid downloading when unchanged
+            if CACHE_DATA.exists():
+                try:
+                    meta = _http_head(RAW_NEWS_URL)
+                    if meta.get("ok") and meta.get("content_length"):
+                        if int(meta["content_length"]) == CACHE_DATA.stat().st_size:
+                            _last_refresh = {
+                                "ok": True, "message": "up to date",
+                                "count": _last_refresh.get("count", 0),
+                                "ts": time.time(),
+                            }
+                            return True, "up to date"
+                except Exception:
+                    pass
+
+            # 2) download news
             raw = _http_get(RAW_NEWS_URL).decode("utf-8")
             parsed = json.loads(raw)
             if not isinstance(parsed.get("news"), list):
                 raise ValueError("invalid payload")
 
+            # 3) skip write if lastUpdated unchanged
+            if CACHE_DATA.exists():
+                try:
+                    old = json.loads(CACHE_DATA.read_text(encoding="utf-8"))
+                    if old.get("lastUpdated") == parsed.get("lastUpdated"):
+                        _last_refresh = {
+                            "ok": True, "message": "up to date",
+                            "count": len(parsed["news"]),
+                            "ts": time.time(),
+                        }
+                        return True, "up to date"
+                except Exception:
+                    pass
+
             CACHE_DATA.write_text(raw, encoding="utf-8")
 
+            # 4) download archive
             try:
-                arch_raw = _http_get(RAW_ARCHIVE_URL).decode("utf-8")
-                if isinstance(json.loads(arch_raw), dict):
-                    CACHE_ARCHIVE.write_text(arch_raw, encoding="utf-8")
+                arch = _http_get(RAW_ARCHIVE_URL).decode("utf-8")
+                json.loads(arch)
+                CACHE_ARCHIVE.write_text(arch, encoding="utf-8")
             except Exception:
                 pass
 
+            # 5) download images
             downloaded = 0
             for item in parsed["news"]:
                 img = item.get("image") or ""
@@ -196,60 +275,59 @@ def do_fetch():
                 except Exception:
                     pass
 
-            _last_refresh = {"ok": True, "message": "updated", "count": len(parsed["news"]), "ts": time.time()}
+            _last_refresh = {
+                "ok": True, "message": "updated",
+                "count": len(parsed["news"]),
+                "ts": time.time(),
+            }
             return True, f"{len(parsed['news'])} stories, {downloaded} images"
         except Exception as exc:
             _last_refresh = {"ok": False, "message": str(exc), "count": 0, "ts": time.time()}
             return False, str(exc)
 
-
-def background_refresher():
+def background_refresher(offline):
     while True:
         time.sleep(REFRESH_INTERVAL)
-        ok, msg = do_fetch()
+        ok, msg = do_fetch(offline=offline)
         log(f"auto-refresh: {msg}", "ok" if ok else "warn")
 
-
-# ---- file resolution ----------------------------------------------------
-def resolve_news_file():
-    candidates = [CACHE_DATA, BASE_DIR / "output" / "news-data.json", WEB_DIR / "data" / "news-data.json"]
-    existing = [p for p in candidates if p.exists()]
+# ---- resolve files ------------------------------------------------------
+def _newest(paths):
+    existing = [p for p in paths if p.exists()]
     if not existing:
         return None
     return max(existing, key=lambda p: p.stat().st_mtime)
 
+def resolve_news_file():
+    return _newest([
+        CACHE_DATA,
+        BASE_DIR / "output" / "news-data.json",
+        WEB_DIR / "data" / "news-data.json",
+    ])
 
 def resolve_archive_file():
-    candidates = [CACHE_ARCHIVE, BASE_DIR / "output" / "archive.json", WEB_DIR / "data" / "archive.json"]
-    existing = [p for p in candidates if p.exists()]
-    if not existing:
-        return None
-    return max(existing, key=lambda p: p.stat().st_mtime)
-
+    return _newest([
+        CACHE_ARCHIVE,
+        BASE_DIR / "output" / "archive.json",
+        WEB_DIR / "data" / "archive.json",
+    ])
 
 def resolve_image(name):
     safe = Path(name).name
-    candidates = [
+    for p in [
         CACHE_IMAGES / safe,
         WEB_DIR / "images" / safe,
         WEB_DIR / "output" / "images" / safe,
         BASE_DIR / "output" / "images" / safe,
-    ]
-    for p in candidates:
+    ]:
         if p.exists() and p.is_file():
             return p
     return None
 
-
 MIME_BY_EXT = {
-    "jpg": "image/jpeg",
-    "jpeg": "image/jpeg",
-    "png": "image/png",
-    "webp": "image/webp",
-    "gif": "image/gif",
-    "svg": "image/svg+xml",
+    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+    "webp": "image/webp", "gif": "image/gif", "svg": "image/svg+xml",
 }
-
 
 # ---- http server --------------------------------------------------------
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -265,8 +343,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_file(self, file_path, mime, cache="no-store"):
-        data = file_path.read_bytes()
+    def _send_file(self, path, mime, cache="no-store"):
+        data = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(data)))
@@ -275,49 +353,46 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        path = self.path
+        p = self.path
 
-        # --- news JSON ---
-        if path.startswith("/output/news-data.json"):
-            news = resolve_news_file()
-            if not news:
-                return self._send_json({"news": [], "lastUpdated": None, "translationStats": {}}, 404)
-            return self._send_file(news, "application/json; charset=utf-8")
+        if p.startswith("/output/news-data.json"):
+            f = resolve_news_file()
+            if not f:
+                return self._send_json({"news": [], "lastUpdated": None}, 404)
+            return self._send_file(f, "application/json; charset=utf-8")
 
-        # --- archive JSON ---
-        if path.startswith("/output/archive.json"):
-            archive = resolve_archive_file()
-            if not archive:
+        if p.startswith("/output/archive.json"):
+            f = resolve_archive_file()
+            if not f:
                 return self._send_json({"news": [], "totalNews": 0}, 404)
-            return self._send_file(archive, "application/json; charset=utf-8")
+            return self._send_file(f, "application/json; charset=utf-8")
 
-        # --- images ---
-        if path.startswith("/images/"):
-            raw_name = path.split("/images/", 1)[1].split("?", 1)[0]
-            name = urllib.parse.unquote(raw_name)
+        if p.startswith("/images/"):
+            raw = p.split("/images/", 1)[1].split("?", 1)[0]
+            name = urllib.parse.unquote(raw)
             if not name or ".." in name or "/" in name or "\\" in name:
                 return self.send_error(404)
-            file_path = resolve_image(name)
-            if not file_path:
+            f = resolve_image(name)
+            if not f:
                 return self.send_error(404)
             ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-            mime = MIME_BY_EXT.get(ext, "application/octet-stream")
-            return self._send_file(file_path, mime, cache="public, max-age=3600")
+            return self._send_file(
+                f,
+                MIME_BY_EXT.get(ext, "application/octet-stream"),
+                cache="public, max-age=3600",
+            )
 
-        # --- api ---
-        if path.startswith("/api/refresh"):
-            ok, msg = do_fetch()
+        if p.startswith("/api/refresh"):
+            ok, msg = do_fetch(offline=False)
             return self._send_json({"ok": ok, "message": msg, **_last_refresh})
 
-        if path.startswith("/api/status"):
+        if p.startswith("/api/status"):
             return self._send_json(_last_refresh)
 
-        # --- static files ---
         return super().do_GET()
 
     def log_message(self, *args):
         pass
-
 
 def start_server():
     httpd = socketserver.ThreadingTCPServer((HOST, 0), Handler)
@@ -326,7 +401,6 @@ def start_server():
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd, port
 
-
 def _wait_for_exit():
     try:
         while True:
@@ -334,9 +408,8 @@ def _wait_for_exit():
     except KeyboardInterrupt:
         pass
 
-
 # ---- native window ------------------------------------------------------
-def try_native(url, verbose=False):
+def try_native(url):
     try:
         import webview
     except ImportError:
@@ -344,93 +417,86 @@ def try_native(url, verbose=False):
         return False
 
     shown = {"flag": False}
-
     try:
-        window = webview.create_window(
-            "News Aggregator",
-            url,
-            width=1280,
-            height=850,
-            min_size=(800, 600),
-            text_select=True,
+        w = webview.create_window(
+            "News Aggregator", url,
+            width=1280, height=850, min_size=(800, 600), text_select=True,
         )
-        window.events.shown += lambda: shown.__setitem__("flag", True)
+        w.events.shown += lambda: shown.__setitem__("flag", True)
     except Exception as exc:
         log(f"create_window failed: {exc}", "err")
         return False
 
-    started = time.time()
     try:
-        with quiet_webview(verbose):
+        with quiet_stderr():
             webview.start()
     except Exception as exc:
         log(f"webview.start failed: {exc}", "err")
         return False
 
-    duration = time.time() - started
-    if shown["flag"]:
-        log(f"window closed after {duration:.0f}s", "info")
     return shown["flag"]
-
 
 # ---- main ---------------------------------------------------------------
 def main():
+    open_log()
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--browser", action="store_true")
-    parser.add_argument("--no-open", action="store_true")
-    parser.add_argument("--refresh-only", action="store_true")
-    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--browser", action="store_true", help="open in default browser")
+    parser.add_argument("--no-open", action="store_true", help="server only")
+    parser.add_argument("--no-splash", action="store_true", help="skip splash")
+    parser.add_argument("--refresh-only", action="store_true", help="fetch and exit")
+    parser.add_argument("--offline", action="store_true", help="skip network")
     args = parser.parse_args()
 
-    progress(0.3, "Loading runtime")
-    log(f"python {sys.version.split()[0]}", "ok")
+    splash = Splash() if (not args.no_splash and not args.refresh_only) else None
+    if splash:
+        splash.update("Loading runtime...")
+    log(f"python {sys.version.split()[0]}")
 
-    progress(0.2, "Preparing cache")
-    log(f"cache: {CACHE_DIR}", "ok")
-
-    progress(0.6, "Checking GitHub")
-    ok, msg = do_fetch()
-    if ok:
-        log(f"downloaded: {msg}", "ok")
-    else:
-        log(f"remote check: {msg}", "warn")
-        log("using bundled or cached data", "info")
+    if splash:
+        splash.update("Checking GitHub...")
+    ok, msg = do_fetch(offline=args.offline)
+    log(("downloaded: " if ok else "remote check: ") + msg, "ok" if ok else "warn")
 
     if args.refresh_only:
-        log("refresh-only, exiting", "info")
+        if splash:
+            splash.close()
         return
 
-    progress(0.3, "Starting local server")
+    if splash:
+        splash.update("Starting server...")
     httpd, port = start_server()
     url = f"http://{HOST}:{port}/index.html"
     log(f"listening on {url}", "ok")
 
     if args.no_open:
-        log("server running, no window", "info")
+        if splash:
+            splash.close()
         _wait_for_exit()
         httpd.shutdown()
         return
 
-    threading.Thread(target=background_refresher, daemon=True).start()
+    threading.Thread(target=background_refresher, args=(args.offline,), daemon=True).start()
+
+    if splash:
+        splash.update("Opening window...")
+        time.sleep(0.2)
+        splash.close()
 
     if args.browser:
-        log("opening browser", "info")
         webbrowser.open(url)
         _wait_for_exit()
         httpd.shutdown()
         return
 
-    progress(0.2, "Opening window")
-    window_shown = try_native(url, verbose=args.verbose)
-
-    if not window_shown:
+    window_ok = try_native(url)
+    if not window_ok:
         log("native window not shown, opening browser", "warn")
         webbrowser.open(url)
         _wait_for_exit()
 
     httpd.shutdown()
-    log("shutdown", "info")
-
+    log("shutdown")
 
 if __name__ == "__main__":
     main()

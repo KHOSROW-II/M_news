@@ -38,7 +38,6 @@ function shouldShowToggle(item) {
     return item.needsTranslation && (item.translated || item.translationError);
 }
 
-// FIX: نام فیلد اصلی originalX است نه xOriginal
 function textFor(item, field, useOriginal) {
     const originalKey = 'original' + field.charAt(0).toUpperCase() + field.slice(1);
     const translated = item[field];
@@ -47,22 +46,23 @@ function textFor(item, field, useOriginal) {
     return translated || original || '';
 }
 
-/* ---------- data: load current + archive ---------- */
-async function loadData() {
+/* ---------- data ---------- */
+async function loadData(force = false) {
     try {
-        const [curRes, archRes] = await Promise.all([
-            fetch('output/news-data.json?t=' + Date.now()),
-            fetch('output/archive.json?t=' + Date.now()).catch(() => null),
-        ]);
-
+        const curRes = await fetch('output/news-data.json?t=' + Date.now());
         if (!curRes.ok) throw new Error('HTTP ' + curRes.status);
         const currentData = await curRes.json();
+
+        // conditional: skip re-render if nothing changed
+        if (!force && currentData.lastUpdated && currentData.lastUpdated === lastKnownTimestamp) {
+            return;
+        }
+
+        const archRes = await fetch('output/archive.json?t=' + Date.now()).catch(() => null);
         const archiveData = (archRes && archRes.ok) ? await archRes.json() : { news: [] };
 
         const currentNews = Array.isArray(currentData.news) ? currentData.news : [];
         const currentIds = new Set(currentNews.map(n => n.id));
-
-        // FIX: خبرهای آرشیو که در current نیستن رو با archived:true اضافه کن
         const archivedOnly = (Array.isArray(archiveData.news) ? archiveData.news : [])
             .filter(n => n && n.id && !currentIds.has(n.id))
             .map(n => ({ ...n, archived: true }));
@@ -80,7 +80,7 @@ async function loadData() {
 }
 
 function updateCountBadge(data) {
-    let brand = document.querySelector('.brand');
+    const brand = document.querySelector('.brand');
     if (!brand) return;
     let badge = document.getElementById('countBadge');
     if (!badge) {
@@ -266,15 +266,25 @@ function closeReader() {
 }
 
 /* ---------- refresh ---------- */
-async function refresh() {
+async function refresh(manual = false) {
     const btn = $('refreshBtn');
-    btn.textContent = 'Refreshing...';
-    btn.disabled = true;
-    try { await fetch('/api/refresh', { cache: 'no-store' }).catch(() => null); }
-    catch (e) { /* ignore */ }
-    await loadData();
-    btn.textContent = 'Refresh';
-    btn.disabled = false;
+    if (btn) {
+        btn.textContent = 'Refreshing...';
+        btn.disabled = true;
+    }
+
+    // ask the local server to pull from GitHub (conditional)
+    try {
+        await fetch('/api/refresh', { cache: 'no-store' }).catch(() => null);
+    } catch (e) { /* ignore */ }
+
+    // manual click always re-renders; auto refresh skips if unchanged
+    await loadData(manual);
+
+    if (btn) {
+        btn.textContent = 'Refresh';
+        btn.disabled = false;
+    }
 }
 
 /* ---------- init ---------- */
@@ -306,7 +316,7 @@ function init() {
     });
 
     $('langBtn').addEventListener('click', toggleGlobal);
-    $('refreshBtn').addEventListener('click', refresh);
+    $('refreshBtn').addEventListener('click', () => refresh(true));
     $('readerClose').addEventListener('click', closeReader);
     $('reader').addEventListener('click', (e) => {
         if (e.target === $('reader')) closeReader();
@@ -316,7 +326,7 @@ function init() {
     });
 
     loadData();
-    setInterval(refresh, CONFIG.refreshIntervalMs);
+    setInterval(() => refresh(false), CONFIG.refreshIntervalMs);
 }
 
 document.addEventListener('DOMContentLoaded', init);
