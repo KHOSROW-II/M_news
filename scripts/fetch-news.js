@@ -2,9 +2,9 @@ const https = require('https');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { XMLParser } = require('fast-xml-parser');
 const cheerio = require('cheerio');
-const crypto = require('crypto');
 
 // ---------- paths ----------
 const outputDir = path.join(__dirname, '..', 'output');
@@ -24,10 +24,7 @@ const IMAGE_TIMEOUT = 10000;
 const MAX_ARCHIVE = 500;
 
 // ---------- sources ----------
-// type 'rss' -> مستقیم از فید RSS
-// type 'html' -> صفحه اصلی رو اسکرپ می‌کنیم
 const SOURCES = [
-  // --- RSS مستقیم (لینک‌ها از قبل معتبرن) ---
   { id: 'bbcpersian', name: 'BBC Persian', lang: 'fa', type: 'rss',
     url: 'https://feeds.bbci.co.uk/persian/rss.xml' },
 
@@ -49,7 +46,6 @@ const SOURCES = [
   { id: 'iranintl', name: 'Iran International', lang: 'fa', type: 'rss',
     url: 'https://www.iranintl.com/fa/rss' },
 
-  // --- HTML scrape ---
   { id: 'c14', name: 'C14', lang: 'he', type: 'html',
     url: 'https://www.c14.co.il/',
     articleSelectors: ['article h2 a', 'article h3 a', 'h2 a', 'h3 a'] },
@@ -58,6 +54,53 @@ const SOURCES = [
     url: 'https://rezapahlavi.org/en/',
     articleSelectors: ['article h2 a', 'article h3 a', '.entry-title a'] },
 ];
+
+// ---------- helpers ----------
+const toArray = (x) => (Array.isArray(x) ? x : (x == null ? [] : [x]));
+
+const textOf = (x) => {
+  if (x == null) return '';
+  if (typeof x === 'string') return x;
+  if (typeof x === 'number') return String(x);
+  if (x.__cdata) return String(x.__cdata);
+  if (x['#text']) return String(x['#text']);
+  return '';
+};
+
+function stripHtml(html) {
+  if (!html) return '';
+  return String(html)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function resolveUrl(href, baseUrl) {
+  try { return new URL(href, baseUrl).href; }
+  catch { return ''; }
+}
+
+function stableId(sourceId, link, title) {
+  const key = link || title || Math.random().toString();
+  return `${sourceId}-${crypto.createHash('md5').update(key).digest('hex').slice(0, 10)}`;
+}
+
+function describeError(err) {
+  if (err == null) return 'unknown (null)';
+  if (typeof err === 'string') return err || 'empty string';
+  if (err.code && err.message) return `${err.code}: ${err.message}`;
+  if (err.code) return err.code;
+  if (err.message) return err.message;
+  try { return JSON.stringify(err); } catch { return 'unknown error'; }
+}
 
 // ---------- http ----------
 function fetchUrl(url, opts = {}) {
@@ -91,7 +134,10 @@ function fetchUrl(url, opts = {}) {
           return go(new URL(res.headers.location, u).href);
         }
         if (res.statusCode !== 200) {
-          if (attempt < retries) { attempt++; return setTimeout(() => go(u), 1500); }
+          if (attempt < retries) {
+            attempt++;
+            return setTimeout(() => go(u), 1500);
+          }
           return reject(new Error(`HTTP ${res.statusCode}`));
         }
         const chunks = [];
@@ -101,59 +147,31 @@ function fetchUrl(url, opts = {}) {
           resolve(binary ? buf : buf.toString('utf8'));
         });
       });
+
       req.on('error', (err) => {
-        const wrapped = (err instanceof Error && err.message)
-          ? err
-          : new Error(
-              (err && (err.code || err.message)) ||
-              'network error'
-            );
         if (attempt < retries) {
           attempt++;
           return setTimeout(() => go(u), 1500);
         }
-        reject(wrapped);
+        reject(err);
       });
+
       req.on('timeout', () => {
         req.destroy(new Error('timeout'));
       });
+
+      req.end();
+    };
 
     go(url);
   });
 }
 
-// ---------- helpers ----------
-const toArray = (x) => (Array.isArray(x) ? x : (x == null ? [] : [x]));
-
-const textOf = (x) => {
-  if (x == null) return '';
-  if (typeof x === 'string') return x;
-  if (typeof x === 'number') return String(x);
-  if (x.__cdata) return String(x.__cdata);
-  if (x['#text']) return String(x['#text']);
-  return '';
-};
-
-function stableId(sourceId, link, title) {
-  const key = link || title || Math.random().toString();
-  return `${sourceId}-${crypto.createHash('md5').update(key).digest('hex').slice(0, 10)}`;
-}
-
-function describeError(err) {
-  if (err == null) return 'unknown (null)';
-  if (typeof err === 'string') return err || 'empty string';
-  if (err.code && err.message) return `${err.code}: ${err.message}`;
-  if (err.code) return err.code;
-  if (err.message) return err.message;
-  try { return JSON.stringify(err); } catch { return 'unknown error'; }
-}
-
-// اگر متن داخلش JSON-LD با articleBody داره، همون رو استخراج کن
+// ---------- JSON-LD extraction ----------
 function extractJsonLdArticle(text) {
   if (!text || typeof text !== 'string') return null;
   if (!text.includes('articleBody')) return null;
 
-  // همه‌ی بلوک‌های {} سطح-بالا رو پیدا کن
   const blocks = [];
   let depth = 0;
   let inString = false;
@@ -184,7 +202,6 @@ function extractJsonLdArticle(text) {
     try { parsed = JSON.parse(block); }
     catch { continue; }
 
-    // بعضی فیدها آرایه می‌دن
     const items = Array.isArray(parsed) ? parsed : [parsed];
     for (const item of items) {
       if (!item || typeof item !== 'object') continue;
@@ -200,8 +217,7 @@ function extractJsonLdArticle(text) {
       } else if (typeof item.image === 'string') {
         image = item.image;
       }
-      // پاک کردن فاصله‌های اضافی که بعضی سایت‌ها می‌ذارن
-      image = image.replace(/\s+/g, '');
+      image = String(image).replace(/\s+/g, '');
 
       return {
         title: (item.headline || '').trim(),
@@ -213,27 +229,6 @@ function extractJsonLdArticle(text) {
   }
 
   return null;
-}
-
-function stripHtml(html) {
-  if (!html) return '';
-  return String(html)
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function resolveUrl(href, baseUrl) {
-  try { return new URL(href, baseUrl).href; }
-  catch { return ''; }
 }
 
 // ---------- RSS parser ----------
@@ -267,7 +262,7 @@ function pickImageFromRss(item) {
 function parseRss(xml) {
   const doc = parser.parse(xml);
 
-  if (doc?.rss?.channel) {
+  if (doc && doc.rss && doc.rss.channel) {
     return toArray(doc.rss.channel.item).map(item => ({
       title: textOf(item.title),
       link: textOf(item.link) || (item.link && item.link['@_href']) || '',
@@ -278,14 +273,14 @@ function parseRss(xml) {
     }));
   }
 
-  if (doc?.feed) {
+  if (doc && doc.feed) {
     return toArray(doc.feed.entry).map(entry => {
       let link = '';
       if (typeof entry.link === 'string') link = entry.link;
       else if (Array.isArray(entry.link)) {
         const alt = entry.link.find(l => l['@_rel'] === 'alternate') || entry.link[0];
-        link = alt?.['@_href'] || '';
-      } else if (entry.link?.['@_href']) {
+        link = alt && alt['@_href'] ? alt['@_href'] : '';
+      } else if (entry.link && entry.link['@_href']) {
         link = entry.link['@_href'];
       }
       return {
@@ -316,31 +311,20 @@ function extractArticle(html, articleUrl) {
     || $('meta[property="twitter:image"]').attr('content')
     || '';
 
-  // بهترین ظرف محتوا رو پیدا کن
   const candidates = [
-    'article',
-    'main',
-    '[role="main"]',
-    '.article-body',
-    '.article__body',
-    '.post-content',
-    '.entry-content',
-    '.story-body',
-    '.article-content',
-    '.post-body',
-    '#article-body',
-    '.content',
+    'article', 'main', '[role="main"]',
+    '.article-body', '.article__body', '.post-content',
+    '.entry-content', '.story-body', '.article-content',
+    '.post-body', '#article-body', '.content',
   ];
 
   let bestText = '';
   for (const sel of candidates) {
     const el = $(sel).first();
     if (!el.length) continue;
-    // پاراگراف‌ها رو جدا کن
     const paras = el.find('p').map((i, p) => $(p).text().trim()).get().filter(t => t.length > 25);
     const joined = paras.join('\n\n');
     if (joined.length > bestText.length) bestText = joined;
-    // اگه پاراگراف کم بود، کل متن
     if (bestText.length < 200) {
       const allText = el.text().replace(/\s+/g, ' ').trim();
       if (allText.length > bestText.length) bestText = allText;
@@ -362,9 +346,9 @@ function extractArticle(html, articleUrl) {
   return { title: title.trim(), content: bestText.trim(), image };
 }
 
-// ---------- html scraping ----------
+// ---------- html scrape ----------
 async function scrapeHtmlSource(source) {
-  console.log(`[fetch] ${source.id} (html)`);
+  console.log(`[fetch] ${source.id} (html) ${source.url}`);
   const html = await fetchUrl(source.url, { timeout: ARTICLE_TIMEOUT });
   const $ = cheerio.load(html);
 
@@ -373,15 +357,14 @@ async function scrapeHtmlSource(source) {
 
   for (const sel of source.articleSelectors) {
     $(sel).each((i, el) => {
-      if (items.length >= MAX_ITEMS_PER_SOURCE) return;
-
+      if (items.length >= MAX_ITEMS_PER_SOURCE) return false;
       const $a = $(el);
       const href = $a.attr('href');
       if (!href) return;
 
       const link = resolveUrl(href, source.url);
       if (!link || seen.has(link)) return;
-      // فقط لینک‌های داخل همون دامنه
+
       try {
         const u = new URL(link);
         const s = new URL(source.url);
@@ -392,7 +375,7 @@ async function scrapeHtmlSource(source) {
       if (!title || title.length < 10) return;
 
       seen.add(link);
-      items.push({ title, link, pubDate: new Date().toISOString(), description: '', content: '', image: '' });
+      items.push({ title, link, pubDate: '', description: '', content: '', image: '' });
     });
   }
 
@@ -420,7 +403,7 @@ async function downloadImage(imageUrl, id) {
     fs.writeFileSync(filepath, buf);
     return `images/${filename}`;
   } catch (err) {
-    console.log(`[img] skip ${imageUrl.slice(0, 60)}: ${err.message}`);
+    console.log(`[img] skip ${imageUrl.slice(0, 60)}: ${describeError(err)}`);
     return '';
   }
 }
@@ -432,9 +415,9 @@ async function enrichItem(item, source) {
   let content = '';
   let image = item.image || '';
 
-  // 1) اول ببین داخل RSS اصلاً JSON-LD هست یا نه
   const rawRss = item.content || item.description || '';
   const jsonLd = extractJsonLdArticle(rawRss);
+
   if (jsonLd) {
     title = title || jsonLd.title;
     content = jsonLd.content;
@@ -444,31 +427,31 @@ async function enrichItem(item, source) {
     content = stripHtml(rawRss);
   }
 
-  // 2) اگه محتوا هنوز کم بود، صفحه مقاله رو بگیر
   if (link && content.length < 400) {
     try {
       const html = await fetchUrl(link, { timeout: ARTICLE_TIMEOUT, retries: 1 });
-
-      // 2-الف) داخل HTML هم دنبال JSON-LD بگرد
       const jsonLdFromPage = extractJsonLdArticle(html);
       if (jsonLdFromPage && jsonLdFromPage.content.length > content.length) {
         title = title || jsonLdFromPage.title;
         content = jsonLdFromPage.content;
         image = image || jsonLdFromPage.image;
       } else {
-        // 2-ب) در غیر این صورت از cheerio استفاده کن
         const ex = extractArticle(html, link);
         if (ex.content && ex.content.length > content.length) content = ex.content;
         if (!image && ex.image) image = ex.image;
         if (!title && ex.title) title = ex.title;
       }
     } catch (err) {
-      console.log(`[enrich] fail ${link.slice(0, 60)}: ${describeError(err)}`);
+      console.log(`[enrich] fail ${String(link).slice(0, 60)}: ${describeError(err)}`);
     }
   }
 
   const id = stableId(source.id, link, title);
   const localImage = await downloadImage(image, id);
+
+  const pubDate = item.pubDate && !isNaN(new Date(item.pubDate))
+    ? new Date(item.pubDate).toISOString()
+    : new Date().toISOString();
 
   return {
     id,
@@ -482,21 +465,10 @@ async function enrichItem(item, source) {
     content,
     image: localImage,
     link,
-    pubDate: item.pubDate && !isNaN(new Date(item.pubDate)) ? new Date(item.pubDate).toISOString() : new Date().toISOString(),
+    pubDate,
     originalLang: source.lang,
     needsTranslation: source.lang !== 'fa',
   };
-}
-
-function describeError(err) {
-  if (!err) return 'unknown (empty error)';
-  if (typeof err === 'string') return err;
-  const code = err.code || err.errno || '';
-  const msg = err.message || '';
-  if (code && msg) return `${code}: ${msg}`;
-  if (code) return code;
-  if (msg) return msg;
-  return String(err);
 }
 
 // ---------- source runner ----------
@@ -509,7 +481,6 @@ async function fetchSource(source) {
       items = parseRss(xml).slice(0, MAX_ITEMS_PER_SOURCE);
       console.log(`[ok] ${source.id}: ${items.length} rss items`);
     } else {
-      console.log(`[fetch] ${source.id} (html) ${source.url}`);
       items = (await scrapeHtmlSource(source)).slice(0, MAX_ITEMS_PER_SOURCE);
     }
 
@@ -525,19 +496,23 @@ async function fetchSource(source) {
 
     for (const r of rest) {
       const id = stableId(source.id, r.link, r.title);
+      const text = stripHtml(r.content || r.description || '');
+      const pubDate = r.pubDate && !isNaN(new Date(r.pubDate))
+        ? new Date(r.pubDate).toISOString()
+        : new Date().toISOString();
       enriched.push({
         id,
         sourceId: source.id,
         sourceName: source.name,
         originalTitle: r.title,
         title: r.title,
-        originalSummary: stripHtml(r.content || r.description).slice(0, 400),
-        summary: stripHtml(r.content || r.description).slice(0, 400),
-        originalContent: stripHtml(r.content || r.description),
-        content: stripHtml(r.content || r.description),
+        originalSummary: text.slice(0, 400),
+        summary: text.slice(0, 400),
+        originalContent: text,
+        content: text,
         image: r.image || '',
         link: r.link,
-        pubDate: r.pubDate && !isNaN(new Date(r.pubDate)) ? new Date(r.pubDate).toISOString() : new Date().toISOString(),
+        pubDate,
         originalLang: source.lang,
         needsTranslation: source.lang !== 'fa',
       });
@@ -587,7 +562,6 @@ async function main() {
     allNews.push(...r.items);
   }
 
-  // حذف تکراری بر اساس id
   const seen = new Set();
   const unique = allNews.filter(n => {
     if (!n.id || seen.has(n.id)) return false;
@@ -595,7 +569,6 @@ async function main() {
     return true;
   });
 
-  // مرتب‌سازی جدیدترین‌ها اول
   unique.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
 
   const output = {
