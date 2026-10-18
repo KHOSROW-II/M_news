@@ -7,7 +7,7 @@ let currentSource = 'all';
 let currentSearch = '';
 let showOriginal = false;
 let lastKnownTimestamp = null;
-const cardMode = new Map(); // id -> 'translated' | 'original'
+const cardMode = new Map();
 
 const $ = (id) => document.getElementById(id);
 
@@ -38,32 +38,64 @@ function shouldShowToggle(item) {
     return item.needsTranslation && (item.translated || item.translationError);
 }
 
+// FIX: نام فیلد اصلی originalX است نه xOriginal
 function textFor(item, field, useOriginal) {
+    const originalKey = 'original' + field.charAt(0).toUpperCase() + field.slice(1);
     const translated = item[field];
-    const original = item[field + 'Original'];
+    const original = item[originalKey];
     if (useOriginal) return original || translated || '';
     return translated || original || '';
 }
 
-/* ---------- data ---------- */
+/* ---------- data: load current + archive ---------- */
 async function loadData() {
     try {
-        const res = await fetch('output/news-data.json?t=' + Date.now());
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        allNews = Array.isArray(data.news) ? data.news : [];
-        lastKnownTimestamp = data.lastUpdated || null;
+        const [curRes, archRes] = await Promise.all([
+            fetch('output/news-data.json?t=' + Date.now()),
+            fetch('output/archive.json?t=' + Date.now()).catch(() => null),
+        ]);
+
+        if (!curRes.ok) throw new Error('HTTP ' + curRes.status);
+        const currentData = await curRes.json();
+        const archiveData = (archRes && archRes.ok) ? await archRes.json() : { news: [] };
+
+        const currentNews = Array.isArray(currentData.news) ? currentData.news : [];
+        const currentIds = new Set(currentNews.map(n => n.id));
+
+        // FIX: خبرهای آرشیو که در current نیستن رو با archived:true اضافه کن
+        const archivedOnly = (Array.isArray(archiveData.news) ? archiveData.news : [])
+            .filter(n => n && n.id && !currentIds.has(n.id))
+            .map(n => ({ ...n, archived: true }));
+
+        allNews = [...currentNews, ...archivedOnly];
+        allNews.sort((a, b) => new Date(b.pubDate || 0) - new Date(a.pubDate || 0));
+
+        lastKnownTimestamp = currentData.lastUpdated || null;
         render();
-        updateStatusBar(data);
+        updateCountBadge(currentData);
     } catch (err) {
         console.error('load:', err);
         $('grid').innerHTML = '<div class="loading">Failed to load news</div>';
     }
 }
 
-function updateStatusBar(data) {
-    // no visible status bar in this minimal layout; log only
-    console.log('[status]', data.lastUpdated, data.translationStats);
+function updateCountBadge(data) {
+    let brand = document.querySelector('.brand');
+    if (!brand) return;
+    let badge = document.getElementById('countBadge');
+    if (!badge) {
+        badge = document.createElement('span');
+        badge.id = 'countBadge';
+        badge.className = 'count';
+        brand.appendChild(badge);
+    }
+    const current = (data.news || []).length;
+    const archived = allNews.filter(n => n.archived).length;
+    const parts = [`${current} current`];
+    if (archived > 0) parts.push(`${archived} archived`);
+    const failed = (data.stats?.failedSources || []).length;
+    if (failed > 0) parts.push(`${failed} failed`);
+    badge.textContent = parts.join(' · ');
 }
 
 /* ---------- render ---------- */
@@ -75,21 +107,30 @@ function render() {
 function renderFilters() {
     const sources = {};
     for (const n of allNews) if (n.sourceId) sources[n.sourceId] = n.sourceName;
+    const hasArchived = allNews.some(n => n.archived);
 
-    const html = [
+    const chips = [
         `<button class="chip ${currentSource === 'all' ? 'active' : ''}" data-source="all" type="button">All</button>`,
-        ...Object.entries(sources).map(([id, name]) =>
-            `<button class="chip ${currentSource === id ? 'active' : ''}" data-source="${escapeHtml(id)}" type="button">${escapeHtml(name)}</button>`),
-    ].join('');
-    $('filters').innerHTML = html;
+    ];
+    if (hasArchived) {
+        chips.push(`<button class="chip ${currentSource === 'archived' ? 'active' : ''}" data-source="archived" type="button">Archive</button>`);
+    }
+    for (const [id, name] of Object.entries(sources)) {
+        chips.push(`<button class="chip ${currentSource === id ? 'active' : ''}" data-source="${escapeHtml(id)}" type="button">${escapeHtml(name)}</button>`);
+    }
+    $('filters').innerHTML = chips.join('');
 }
 
 function getFiltered() {
     return allNews.filter(n => {
         if (!n) return false;
-        if (currentSource !== 'all' && n.sourceId !== currentSource) return false;
+        if (currentSource === 'archived') {
+            if (!n.archived) return false;
+        } else if (currentSource !== 'all' && n.sourceId !== currentSource) {
+            return false;
+        }
         if (currentSearch) {
-            const hay = `${n.title || ''} ${n.titleOriginal || ''} ${n.summary || ''}`.toLowerCase();
+            const hay = `${n.title || ''} ${n.originalTitle || ''} ${n.summary || ''}`.toLowerCase();
             if (!hay.includes(currentSearch.toLowerCase())) return false;
         }
         return true;
@@ -110,12 +151,17 @@ function renderCard(item) {
     const title = textFor(item, 'title', useOriginal);
     const summary = textFor(item, 'summary', useOriginal);
     const showToggle = shouldShowToggle(item);
-    const toggleLabel = useOriginal ? 'نمایش فارسی' : 'نمایش اصل';
+    const toggleLabel = useOriginal ? 'نمایش فارسی' : 'Show original';
     const langLabel = (item.originalLang || '').toUpperCase();
 
     const img = item.image
         ? `<img class="card-image" src="${escapeHtml(item.image)}" alt="" loading="lazy" onerror="this.style.display='none'">`
         : '<div class="card-image empty"></div>';
+
+    const badges = [];
+    if (item.archived) badges.push('<span class="badge archived">Archive</span>');
+    if (item.translationError) badges.push('<span class="badge failed">Failed</span>');
+    const badgeHtml = badges.join(' ');
 
     const footer = showToggle ? `
         <div class="card-footer">
@@ -128,7 +174,7 @@ function renderCard(item) {
             ${img}
             <div class="card-body">
                 <div class="card-meta">
-                    <span class="source">${escapeHtml(item.sourceName || '')}</span>
+                    <span class="source">${escapeHtml(item.sourceName || '')} ${badgeHtml}</span>
                     <span class="card-time">${timeAgo(item.pubDate)}</span>
                 </div>
                 <h3 class="card-title">${escapeHtml(title)}</h3>
@@ -152,7 +198,7 @@ function toggleGlobal() {
     showOriginal = !showOriginal;
     cardMode.clear();
     const btn = $('langBtn');
-    btn.textContent = showOriginal ? 'Persian' : 'Original';
+    btn.textContent = showOriginal ? 'نمایش فارسی' : 'Show original';
     btn.classList.toggle('active', showOriginal);
     renderGrid();
 }
@@ -175,7 +221,7 @@ function openReader(item) {
             </div>
         </div>
         <div class="reader-actions">
-            ${showToggle ? `<button class="btn ${useOriginal ? 'active' : ''}" id="readerToggle" type="button">${useOriginal ? 'نمایش فارسی' : 'نمایش اصل'}</button>` : ''}
+            ${showToggle ? `<button class="btn ${useOriginal ? 'active' : ''}" id="readerToggle" type="button">${useOriginal ? 'نمایش فارسی' : 'Show original'}</button>` : ''}
             ${item.link ? `<button class="btn" id="readerOpen" type="button">منبع اصلی</button>` : ''}
         </div>
     `;
@@ -224,27 +270,9 @@ async function refresh() {
     const btn = $('refreshBtn');
     btn.textContent = 'Refreshing...';
     btn.disabled = true;
-
-    // try desktop API first, then direct fetch
-    try {
-        await fetch('/api/refresh', { cache: 'no-store' }).catch(() => null);
-    } catch (e) { /* ignore */ }
-
-    try {
-        const res = await fetch('output/news-data.json?t=' + Date.now(), { cache: 'no-store' });
-        if (res.ok) {
-            const data = await res.json();
-            if (data.lastUpdated !== lastKnownTimestamp) {
-                allNews = Array.isArray(data.news) ? data.news : [];
-                lastKnownTimestamp = data.lastUpdated;
-                cardMode.clear();
-                render();
-            }
-        }
-    } catch (e) {
-        console.error('refresh:', e);
-    }
-
+    try { await fetch('/api/refresh', { cache: 'no-store' }).catch(() => null); }
+    catch (e) { /* ignore */ }
+    await loadData();
     btn.textContent = 'Refresh';
     btn.disabled = false;
 }

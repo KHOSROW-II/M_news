@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { XMLParser } = require('fast-xml-parser');
 const cheerio = require('cheerio');
+const crypto = require('crypto');
 
 // ---------- paths ----------
 const outputDir = path.join(__dirname, '..', 'output');
@@ -101,12 +102,21 @@ function fetchUrl(url, opts = {}) {
         });
       });
       req.on('error', (err) => {
-        if (attempt < retries) { attempt++; return setTimeout(() => go(u), 1500); }
-        reject(err);
+        const wrapped = (err instanceof Error && err.message)
+          ? err
+          : new Error(
+              (err && (err.code || err.message)) ||
+              'network error'
+            );
+        if (attempt < retries) {
+          attempt++;
+          return setTimeout(() => go(u), 1500);
+        }
+        reject(wrapped);
       });
-      req.on('timeout', () => req.destroy(new Error('timeout')));
-      req.end();
-    };
+      req.on('timeout', () => {
+        req.destroy(new Error('timeout'));
+      });
 
     go(url);
   });
@@ -123,6 +133,87 @@ const textOf = (x) => {
   if (x['#text']) return String(x['#text']);
   return '';
 };
+
+function stableId(sourceId, link, title) {
+  const key = link || title || Math.random().toString();
+  return `${sourceId}-${crypto.createHash('md5').update(key).digest('hex').slice(0, 10)}`;
+}
+
+function describeError(err) {
+  if (err == null) return 'unknown (null)';
+  if (typeof err === 'string') return err || 'empty string';
+  if (err.code && err.message) return `${err.code}: ${err.message}`;
+  if (err.code) return err.code;
+  if (err.message) return err.message;
+  try { return JSON.stringify(err); } catch { return 'unknown error'; }
+}
+
+// اگر متن داخلش JSON-LD با articleBody داره، همون رو استخراج کن
+function extractJsonLdArticle(text) {
+  if (!text || typeof text !== 'string') return null;
+  if (!text.includes('articleBody')) return null;
+
+  // همه‌ی بلوک‌های {} سطح-بالا رو پیدا کن
+  const blocks = [];
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let start = -1;
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (escape) { escape = false; continue; }
+    if (c === '\\' && inString) { escape = true; continue; }
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+
+    if (c === '{') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (c === '}') {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        blocks.push(text.substring(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+
+  for (const block of blocks) {
+    let parsed;
+    try { parsed = JSON.parse(block); }
+    catch { continue; }
+
+    // بعضی فیدها آرایه می‌دن
+    const items = Array.isArray(parsed) ? parsed : [parsed];
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      const type = item['@type'];
+      if (type !== 'NewsArticle' && type !== 'Article' && type !== 'ReportageNewsArticle') continue;
+      if (!item.articleBody) continue;
+
+      let image = '';
+      if (Array.isArray(item.image)) {
+        image = item.image[0]?.url || item.image[0]?.contentUrl || '';
+      } else if (item.image && typeof item.image === 'object') {
+        image = item.image.url || item.image.contentUrl || '';
+      } else if (typeof item.image === 'string') {
+        image = item.image;
+      }
+      // پاک کردن فاصله‌های اضافی که بعضی سایت‌ها می‌ذارن
+      image = image.replace(/\s+/g, '');
+
+      return {
+        title: (item.headline || '').trim(),
+        content: String(item.articleBody).trim(),
+        image,
+        pubDate: item.datePublished || '',
+      };
+    }
+  }
+
+  return null;
+}
 
 function stripHtml(html) {
   if (!html) return '';
@@ -337,24 +428,46 @@ async function downloadImage(imageUrl, id) {
 // ---------- enrich ----------
 async function enrichItem(item, source) {
   let link = item.link;
-  let content = stripHtml(item.content || item.description || '');
-  let image = item.image || '';
   let title = item.title || '';
+  let content = '';
+  let image = item.image || '';
 
-  // اگه محتوا کم بود، صفحه مقاله رو بگیر
+  // 1) اول ببین داخل RSS اصلاً JSON-LD هست یا نه
+  const rawRss = item.content || item.description || '';
+  const jsonLd = extractJsonLdArticle(rawRss);
+  if (jsonLd) {
+    title = title || jsonLd.title;
+    content = jsonLd.content;
+    image = image || jsonLd.image;
+    if (!item.pubDate && jsonLd.pubDate) item.pubDate = jsonLd.pubDate;
+  } else {
+    content = stripHtml(rawRss);
+  }
+
+  // 2) اگه محتوا هنوز کم بود، صفحه مقاله رو بگیر
   if (link && content.length < 400) {
     try {
       const html = await fetchUrl(link, { timeout: ARTICLE_TIMEOUT, retries: 1 });
-      const ex = extractArticle(html, link);
-      if (ex.content && ex.content.length > content.length) content = ex.content;
-      if (!image && ex.image) image = ex.image;
-      if (!title && ex.title) title = ex.title;
+
+      // 2-الف) داخل HTML هم دنبال JSON-LD بگرد
+      const jsonLdFromPage = extractJsonLdArticle(html);
+      if (jsonLdFromPage && jsonLdFromPage.content.length > content.length) {
+        title = title || jsonLdFromPage.title;
+        content = jsonLdFromPage.content;
+        image = image || jsonLdFromPage.image;
+      } else {
+        // 2-ب) در غیر این صورت از cheerio استفاده کن
+        const ex = extractArticle(html, link);
+        if (ex.content && ex.content.length > content.length) content = ex.content;
+        if (!image && ex.image) image = ex.image;
+        if (!title && ex.title) title = ex.title;
+      }
     } catch (err) {
-      console.log(`[enrich] fail ${link.slice(0, 60)}: ${err.message}`);
+      console.log(`[enrich] fail ${link.slice(0, 60)}: ${describeError(err)}`);
     }
   }
 
-  const id = `${source.id}-${Buffer.from(link || title).toString('base64').slice(0, 16).replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  const id = stableId(source.id, link, title);
   const localImage = await downloadImage(image, id);
 
   return {
@@ -363,8 +476,8 @@ async function enrichItem(item, source) {
     sourceName: source.name,
     originalTitle: title,
     title,
-    originalSummary: (content || '').slice(0, 400),
-    summary: (content || '').slice(0, 400),
+    originalSummary: content.slice(0, 400),
+    summary: content.slice(0, 400),
     originalContent: content,
     content,
     image: localImage,
@@ -375,16 +488,28 @@ async function enrichItem(item, source) {
   };
 }
 
+function describeError(err) {
+  if (!err) return 'unknown (empty error)';
+  if (typeof err === 'string') return err;
+  const code = err.code || err.errno || '';
+  const msg = err.message || '';
+  if (code && msg) return `${code}: ${msg}`;
+  if (code) return code;
+  if (msg) return msg;
+  return String(err);
+}
+
 // ---------- source runner ----------
 async function fetchSource(source) {
   try {
     let items;
     if (source.type === 'rss') {
-      console.log(`[fetch] ${source.id} (rss)`);
-      const xml = await fetchUrl(source.url, { timeout: 15000 });
+      console.log(`[fetch] ${source.id} (rss) ${source.url}`);
+      const xml = await fetchUrl(source.url, { timeout: 20000 });
       items = parseRss(xml).slice(0, MAX_ITEMS_PER_SOURCE);
       console.log(`[ok] ${source.id}: ${items.length} rss items`);
     } else {
+      console.log(`[fetch] ${source.id} (html) ${source.url}`);
       items = (await scrapeHtmlSource(source)).slice(0, MAX_ITEMS_PER_SOURCE);
     }
 
@@ -399,7 +524,7 @@ async function fetchSource(source) {
     }
 
     for (const r of rest) {
-      const id = `${source.id}-${Buffer.from(r.link || r.title).toString('base64').slice(0, 16).replace(/[^a-zA-Z0-9_-]/g, '')}`;
+      const id = stableId(source.id, r.link, r.title);
       enriched.push({
         id,
         sourceId: source.id,
@@ -420,8 +545,9 @@ async function fetchSource(source) {
 
     return { source, items: enriched, error: null };
   } catch (err) {
-    console.error(`[err] ${source.id}: ${err.message}`);
-    return { source, items: [], error: err.message };
+    const msg = describeError(err);
+    console.error(`[err] ${source.id}: ${msg}`);
+    return { source, items: [], error: msg };
   }
 }
 

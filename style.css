@@ -367,3 +367,17 @@ body {
     .reader-title { font-size: 20px; }
     .reader-actions { padding: 12px 20px; }
 }
+
+.badge.archived {
+    background: #6b7280;
+    color: #fff;
+}
+
+.brand .count {
+    font-size: 11px;
+    color: #9ca3af;
+    font-weight: 400;
+    letter-spacing: 0;
+    margin-right: 8px;
+    font-family: inherit;
+}
