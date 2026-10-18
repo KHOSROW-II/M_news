@@ -18,7 +18,7 @@ const archiveFile = path.join(outputDir, 'archive.json');
 
 // ---------- config ----------
 const MAX_ITEMS_PER_SOURCE = 10;
-const MAX_ARTICLE_FETCHES = 6;
+const MAX_ARTICLE_FETCHES = 8;
 const ARTICLE_TIMEOUT = 12000;
 const IMAGE_TIMEOUT = 10000;
 const MAX_ARCHIVE = 500;
@@ -27,29 +27,21 @@ const MAX_ARCHIVE = 500;
 const SOURCES = [
   { id: 'bbcpersian', name: 'BBC Persian', lang: 'fa', type: 'rss',
     url: 'https://feeds.bbci.co.uk/persian/rss.xml' },
-
   { id: 'dw', name: 'DW Farsi', lang: 'fa', type: 'rss',
     url: 'https://rss.dw.com/rdf/rss-fa-all' },
-
   { id: 'rferl', name: 'RFE/RL', lang: 'en', type: 'rss',
     url: 'https://www.rferl.org/api/zrqiteuuir' },
-
   { id: 'jpost', name: 'Jerusalem Post', lang: 'en', type: 'rss',
     url: 'https://www.jpost.com/rss/rssfeedsheadlines.aspx' },
-
   { id: 'aljazeera', name: 'Al Jazeera', lang: 'en', type: 'rss',
     url: 'https://www.aljazeera.com/xml/rss/all.xml' },
-
   { id: 'timesofisrael', name: 'Times of Israel', lang: 'en', type: 'rss',
     url: 'https://www.timesofisrael.com/feed/' },
-
   { id: 'iranintl', name: 'Iran International', lang: 'fa', type: 'rss',
     url: 'https://www.iranintl.com/fa/rss' },
-
   { id: 'c14', name: 'C14', lang: 'he', type: 'html',
     url: 'https://www.c14.co.il/',
     articleSelectors: ['article h2 a', 'article h3 a', 'h2 a', 'h3 a'] },
-
   { id: 'rezapahlavi', name: 'Reza Pahlavi', lang: 'en', type: 'html',
     url: 'https://rezapahlavi.org/en/',
     articleSelectors: ['article h2 a', 'article h3 a', '.entry-title a'] },
@@ -88,8 +80,50 @@ function resolveUrl(href, baseUrl) {
   catch { return ''; }
 }
 
+// ---------- date helpers ----------
+function parseDateSafe(input) {
+  if (!input) return '';
+  if (input instanceof Date) return isNaN(input.getTime()) ? '' : input.toISOString();
+  const s = String(input).trim();
+  if (!s) return '';
+
+  // try direct parse
+  let d = new Date(s);
+  if (!isNaN(d.getTime()) && d.getFullYear() > 1990 && d.getFullYear() < 2100) {
+    return d.toISOString();
+  }
+
+  // try ISO without timezone
+  const isoish = s.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (isoish) {
+    const [, y, mo, da, h, mi, se] = isoish;
+    d = new Date(Date.UTC(+y, +mo - 1, +da, +h, +mi, +(se || 0)));
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+
+  return '';
+}
+
+function normalizeTitle(title) {
+  if (!title) return '';
+  return String(title)
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\s*[-–—|]\s*(jpost|jerusalem post|times of israel|ynet.*|bbc.*|dw.*|rferl.*|al jazeera.*|iran international|iran intl.*|c14|reza pahlavi.*)\s*$/i, '')
+    .trim()
+    .slice(0, 100);
+}
+
+function dedupeKey(item) {
+  if (!item) return '';
+  const src = item.sourceId || '';
+  const t = normalizeTitle(item.originalTitle || item.title || '');
+  return `${src}::${t}`;
+}
+
 function stableId(sourceId, link, title) {
-  const key = link || title || Math.random().toString();
+  const key = (link && String(link).trim()) || (title && String(title).trim()) || crypto.randomBytes(8).toString('hex');
   return `${sourceId}-${crypto.createHash('md5').update(key).digest('hex').slice(0, 10)}`;
 }
 
@@ -155,11 +189,7 @@ function fetchUrl(url, opts = {}) {
         }
         reject(err);
       });
-
-      req.on('timeout', () => {
-        req.destroy(new Error('timeout'));
-      });
-
+      req.on('timeout', () => { req.destroy(new Error('timeout')); });
       req.end();
     };
 
@@ -170,13 +200,10 @@ function fetchUrl(url, opts = {}) {
 // ---------- JSON-LD extraction ----------
 function extractJsonLdArticle(text) {
   if (!text || typeof text !== 'string') return null;
-  if (!text.includes('articleBody')) return null;
+  if (!text.includes('articleBody') && !text.includes('datePublished')) return null;
 
   const blocks = [];
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-  let start = -1;
+  let depth = 0, inString = false, escape = false, start = -1;
 
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
@@ -184,50 +211,38 @@ function extractJsonLdArticle(text) {
     if (c === '\\' && inString) { escape = true; continue; }
     if (c === '"') { inString = !inString; continue; }
     if (inString) continue;
-
-    if (c === '{') {
-      if (depth === 0) start = i;
-      depth++;
-    } else if (c === '}') {
+    if (c === '{') { if (depth === 0) start = i; depth++; }
+    else if (c === '}') {
       depth--;
-      if (depth === 0 && start !== -1) {
-        blocks.push(text.substring(start, i + 1));
-        start = -1;
-      }
+      if (depth === 0 && start !== -1) { blocks.push(text.substring(start, i + 1)); start = -1; }
     }
   }
 
   for (const block of blocks) {
     let parsed;
-    try { parsed = JSON.parse(block); }
-    catch { continue; }
-
+    try { parsed = JSON.parse(block); } catch { continue; }
     const items = Array.isArray(parsed) ? parsed : [parsed];
     for (const item of items) {
       if (!item || typeof item !== 'object') continue;
       const type = item['@type'];
-      if (type !== 'NewsArticle' && type !== 'Article' && type !== 'ReportageNewsArticle') continue;
-      if (!item.articleBody) continue;
+      const isArticle = type === 'NewsArticle' || type === 'Article' || type === 'ReportageNewsArticle';
+      if (!isArticle) continue;
+      if (!item.articleBody && !item.datePublished) continue;
 
       let image = '';
-      if (Array.isArray(item.image)) {
-        image = item.image[0]?.url || item.image[0]?.contentUrl || '';
-      } else if (item.image && typeof item.image === 'object') {
-        image = item.image.url || item.image.contentUrl || '';
-      } else if (typeof item.image === 'string') {
-        image = item.image;
-      }
+      if (Array.isArray(item.image)) image = item.image[0]?.url || item.image[0]?.contentUrl || '';
+      else if (item.image && typeof item.image === 'object') image = item.image.url || item.image.contentUrl || '';
+      else if (typeof item.image === 'string') image = item.image;
       image = String(image).replace(/\s+/g, '');
 
       return {
         title: (item.headline || '').trim(),
-        content: String(item.articleBody).trim(),
+        content: item.articleBody ? String(item.articleBody).trim() : '',
         image,
-        pubDate: item.datePublished || '',
+        pubDate: parseDateSafe(item.datePublished || ''),
       };
     }
   }
-
   return null;
 }
 
@@ -266,7 +281,7 @@ function parseRss(xml) {
     return toArray(doc.rss.channel.item).map(item => ({
       title: textOf(item.title),
       link: textOf(item.link) || (item.link && item.link['@_href']) || '',
-      pubDate: textOf(item.pubDate),
+      pubDate: textOf(item.pubDate) || textOf(item['dc:date']) || '',
       description: textOf(item.description),
       content: textOf(item['content:encoded']),
       image: pickImageFromRss(item),
@@ -293,11 +308,33 @@ function parseRss(xml) {
       };
     });
   }
-
   return [];
 }
 
 // ---------- article extraction ----------
+function extractPubDateFromPage($) {
+  const candidates = [
+    $('meta[property="article:published_time"]').attr('content'),
+    $('meta[property="og:article:published_time"]').attr('content'),
+    $('meta[name="article:published_time"]').attr('content'),
+    $('meta[property="article:published"]').attr('content'),
+    $('meta[itemprop="datePublished"]').attr('content'),
+    $('meta[name="pubdate"]').attr('content'),
+    $('meta[name="publish-date"]').attr('content'),
+    $('meta[name="publish_date"]').attr('content'),
+    $('meta[name="date"]').attr('content'),
+    $('meta[name="dc.date"]').attr('content'),
+    $('meta[name="DC.date.issued"]').attr('content'),
+    $('meta[property="og:updated_time"]').attr('content'),
+    $('time[datetime]').first().attr('datetime'),
+  ];
+  for (const c of candidates) {
+    const d = parseDateSafe(c);
+    if (d) return d;
+  }
+  return '';
+}
+
 function extractArticle(html, articleUrl) {
   const $ = cheerio.load(html);
 
@@ -340,10 +377,14 @@ function extractArticle(html, articleUrl) {
     const firstImg = $('article img, main img, .content img').first().attr('src');
     if (firstImg) image = resolveUrl(firstImg, articleUrl);
   }
-
   if (image && !/^https?:\/\//.test(image)) image = resolveUrl(image, articleUrl);
 
-  return { title: title.trim(), content: bestText.trim(), image };
+  return {
+    title: title.trim(),
+    content: bestText.trim(),
+    image,
+    pubDate: extractPubDateFromPage($),
+  };
 }
 
 // ---------- html scrape ----------
@@ -361,24 +402,19 @@ async function scrapeHtmlSource(source) {
       const $a = $(el);
       const href = $a.attr('href');
       if (!href) return;
-
       const link = resolveUrl(href, source.url);
       if (!link || seen.has(link)) return;
-
       try {
         const u = new URL(link);
         const s = new URL(source.url);
         if (u.hostname !== s.hostname) return;
       } catch { return; }
-
       const title = $a.text().trim();
       if (!title || title.length < 10) return;
-
       seen.add(link);
       items.push({ title, link, pubDate: '', description: '', content: '', image: '' });
     });
   }
-
   console.log(`[ok] ${source.id}: ${items.length} links`);
   return items;
 }
@@ -403,55 +439,73 @@ async function downloadImage(imageUrl, id) {
     fs.writeFileSync(filepath, buf);
     return `images/${filename}`;
   } catch (err) {
-    console.log(`[img] skip ${imageUrl.slice(0, 60)}: ${describeError(err)}`);
+    console.log(`[img] skip ${String(imageUrl).slice(0, 60)}: ${describeError(err)}`);
     return '';
   }
 }
 
 // ---------- enrich ----------
 async function enrichItem(item, source) {
-  let link = item.link;
-  let title = item.title || '';
+  const originalLink = item.link || '';
+  const originalTitle = item.title || '';
+
+  let link = originalLink;
+  let title = originalTitle;
   let content = '';
   let image = item.image || '';
+  let pubDate = '';
 
+  // 1) RSS content
   const rawRss = item.content || item.description || '';
-  const jsonLd = extractJsonLdArticle(rawRss);
+  const rssJsonLd = extractJsonLdArticle(rawRss);
 
-  if (jsonLd) {
-    title = title || jsonLd.title;
-    content = jsonLd.content;
-    image = image || jsonLd.image;
-    if (!item.pubDate && jsonLd.pubDate) item.pubDate = jsonLd.pubDate;
+  if (rssJsonLd) {
+    title = title || rssJsonLd.title;
+    content = rssJsonLd.content || content;
+    image = image || rssJsonLd.image;
+    if (rssJsonLd.pubDate) pubDate = rssJsonLd.pubDate;
   } else {
     content = stripHtml(rawRss);
   }
 
-  if (link && content.length < 400) {
+  // 2) article page — برای محتوای کامل و تاریخ دقیق
+  let pagePubDate = '';
+  if (link) {
     try {
       const html = await fetchUrl(link, { timeout: ARTICLE_TIMEOUT, retries: 1 });
-      const jsonLdFromPage = extractJsonLdArticle(html);
-      if (jsonLdFromPage && jsonLdFromPage.content.length > content.length) {
-        title = title || jsonLdFromPage.title;
-        content = jsonLdFromPage.content;
-        image = image || jsonLdFromPage.image;
-      } else {
-        const ex = extractArticle(html, link);
-        if (ex.content && ex.content.length > content.length) content = ex.content;
-        if (!image && ex.image) image = ex.image;
-        if (!title && ex.title) title = ex.title;
+
+      const pageJsonLd = extractJsonLdArticle(html);
+      if (pageJsonLd) {
+        if (pageJsonLd.content && pageJsonLd.content.length > content.length) {
+          content = pageJsonLd.content;
+        }
+        if (!image && pageJsonLd.image) image = pageJsonLd.image;
+        if (!title && pageJsonLd.title) title = pageJsonLd.title;
+        if (pageJsonLd.pubDate) pagePubDate = pageJsonLd.pubDate;
       }
+
+      // fallback extraction
+      const ex = extractArticle(html, link);
+      if (ex.content && ex.content.length > content.length) content = ex.content;
+      if (!image && ex.image) image = ex.image;
+      if (!title && ex.title) title = ex.title;
+      if (!pagePubDate && ex.pubDate) pagePubDate = ex.pubDate;
     } catch (err) {
       console.log(`[enrich] fail ${String(link).slice(0, 60)}: ${describeError(err)}`);
     }
   }
 
-  const id = stableId(source.id, link, title);
-  const localImage = await downloadImage(image, id);
+  // 3) pubDate priority:
+  //    page → rssJsonLd → rss pubDate → now
+  let finalDate = pagePubDate || pubDate;
+  if (!finalDate) {
+    const rssDate = parseDateSafe(item.pubDate);
+    if (rssDate) finalDate = rssDate;
+  }
+  if (!finalDate) finalDate = new Date().toISOString();
 
-  const pubDate = item.pubDate && !isNaN(new Date(item.pubDate))
-    ? new Date(item.pubDate).toISOString()
-    : new Date().toISOString();
+  const id = stableId(source.id, originalLink, originalTitle);
+  const localImage = await downloadImage(image, id);
 
   return {
     id,
@@ -465,7 +519,7 @@ async function enrichItem(item, source) {
     content,
     image: localImage,
     link,
-    pubDate,
+    pubDate: finalDate,
     originalLang: source.lang,
     needsTranslation: source.lang !== 'fa',
   };
@@ -497,9 +551,7 @@ async function fetchSource(source) {
     for (const r of rest) {
       const id = stableId(source.id, r.link, r.title);
       const text = stripHtml(r.content || r.description || '');
-      const pubDate = r.pubDate && !isNaN(new Date(r.pubDate))
-        ? new Date(r.pubDate).toISOString()
-        : new Date().toISOString();
+      const pubDate = parseDateSafe(r.pubDate) || new Date().toISOString();
       enriched.push({
         id,
         sourceId: source.id,
@@ -526,6 +578,24 @@ async function fetchSource(source) {
   }
 }
 
+// ---------- dedupe ----------
+function dedupeNews(items) {
+  const seenIds = new Set();
+  const seenKeys = new Set();
+  const out = [];
+
+  for (const n of items) {
+    if (!n || !n.id) continue;
+    if (seenIds.has(n.id)) continue;
+    const k = dedupeKey(n);
+    if (k && seenKeys.has(k)) continue;
+    seenIds.add(n.id);
+    if (k) seenKeys.add(k);
+    out.push(n);
+  }
+  return out;
+}
+
 // ---------- archive ----------
 function updateArchive(newItems) {
   let archive = { news: [] };
@@ -535,15 +605,15 @@ function updateArchive(newItems) {
   }
   if (!Array.isArray(archive.news)) archive.news = [];
 
-  const existing = new Set(archive.news.map(n => n.id));
-  const fresh = newItems.filter(n => !existing.has(n.id));
+  const combined = [...newItems, ...archive.news];
+  const cleaned = dedupeNews(combined).slice(0, MAX_ARCHIVE);
 
-  archive.news = [...fresh, ...archive.news].slice(0, MAX_ARCHIVE);
+  archive.news = cleaned;
   archive.lastUpdated = new Date().toISOString();
-  archive.totalNews = archive.news.length;
+  archive.totalNews = cleaned.length;
 
   fs.writeFileSync(archiveFile, JSON.stringify(archive, null, 2));
-  console.log(`[archive] added ${fresh.length}, total ${archive.news.length}`);
+  console.log(`[archive] total ${cleaned.length} (from ${combined.length} raw)`);
 }
 
 // ---------- main ----------
@@ -562,13 +632,7 @@ async function main() {
     allNews.push(...r.items);
   }
 
-  const seen = new Set();
-  const unique = allNews.filter(n => {
-    if (!n.id || seen.has(n.id)) return false;
-    seen.add(n.id);
-    return true;
-  });
-
+  const unique = dedupeNews(allNews);
   unique.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
 
   const output = {

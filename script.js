@@ -3,7 +3,7 @@ const CONFIG = {
 };
 
 let allNews = [];
-let currentSource = 'all';
+let currentSource = 'latest';
 let currentSearch = '';
 let showOriginal = false;
 let lastKnownTimestamp = null;
@@ -23,10 +23,22 @@ function escapeHtml(t) {
 function timeAgo(iso) {
     if (!iso) return '';
     const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (diff < 0) return 'now';
     if (diff < 60) return 'now';
     if (diff < 3600) return Math.floor(diff / 60) + 'm';
     if (diff < 86400) return Math.floor(diff / 3600) + 'h';
     return Math.floor(diff / 86400) + 'd';
+}
+
+function normalizeTitle(title) {
+    if (!title) return '';
+    return String(title)
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\s*[-–—|]\s*(jpost|jerusalem post|times of israel|ynet.*|bbc.*|dw.*|rferl.*|al jazeera.*|iran international|iran intl.*|c14|reza pahlavi.*)\s*$/i, '')
+        .trim()
+        .slice(0, 100);
 }
 
 function getMode(item) {
@@ -53,7 +65,6 @@ async function loadData(force = false) {
         if (!curRes.ok) throw new Error('HTTP ' + curRes.status);
         const currentData = await curRes.json();
 
-        // conditional: skip re-render if nothing changed
         if (!force && currentData.lastUpdated && currentData.lastUpdated === lastKnownTimestamp) {
             return;
         }
@@ -62,12 +73,30 @@ async function loadData(force = false) {
         const archiveData = (archRes && archRes.ok) ? await archRes.json() : { news: [] };
 
         const currentNews = Array.isArray(currentData.news) ? currentData.news : [];
-        const currentIds = new Set(currentNews.map(n => n.id));
-        const archivedOnly = (Array.isArray(archiveData.news) ? archiveData.news : [])
-            .filter(n => n && n.id && !currentIds.has(n.id))
-            .map(n => ({ ...n, archived: true }));
+        const archivedRaw = Array.isArray(archiveData.news) ? archiveData.news : [];
 
-        allNews = [...currentNews, ...archivedOnly];
+        const combined = [
+            ...currentNews,
+            ...archivedRaw.map(n => ({ ...n, archived: true })),
+        ];
+
+        const currentIds = new Set(currentNews.map(n => n.id));
+        const merged = [];
+        const seenIds = new Set();
+        const seenKeys = new Set();
+
+        for (const n of combined) {
+            if (!n || !n.id) continue;
+            if (seenIds.has(n.id)) continue;
+            if (n.archived && currentIds.has(n.id)) continue;
+            const key = `${n.sourceId || ''}::${normalizeTitle(n.originalTitle || n.title || '')}`;
+            if (seenKeys.has(key)) continue;
+            seenIds.add(n.id);
+            seenKeys.add(key);
+            merged.push(n);
+        }
+
+        allNews = merged;
         allNews.sort((a, b) => new Date(b.pubDate || 0) - new Date(a.pubDate || 0));
 
         lastKnownTimestamp = currentData.lastUpdated || null;
@@ -91,7 +120,7 @@ function updateCountBadge(data) {
     }
     const current = (data.news || []).length;
     const archived = allNews.filter(n => n.archived).length;
-    const parts = [`${current} current`];
+    const parts = [`${current} latest`];
     if (archived > 0) parts.push(`${archived} archived`);
     const failed = (data.stats?.failedSources || []).length;
     if (failed > 0) parts.push(`${failed} failed`);
@@ -106,10 +135,13 @@ function render() {
 
 function renderFilters() {
     const sources = {};
-    for (const n of allNews) if (n.sourceId) sources[n.sourceId] = n.sourceName;
+    for (const n of allNews) {
+        if (n.sourceId && !n.archived) sources[n.sourceId] = n.sourceName;
+    }
     const hasArchived = allNews.some(n => n.archived);
 
     const chips = [
+        `<button class="chip ${currentSource === 'latest' ? 'active' : ''}" data-source="latest" type="button">Latest</button>`,
         `<button class="chip ${currentSource === 'all' ? 'active' : ''}" data-source="all" type="button">All</button>`,
     ];
     if (hasArchived) {
@@ -124,11 +156,24 @@ function renderFilters() {
 function getFiltered() {
     return allNews.filter(n => {
         if (!n) return false;
-        if (currentSource === 'archived') {
+
+        // Latest: فقط خبرهای غیرآرشیوی
+        if (currentSource === 'latest') {
+            if (n.archived) return false;
+        }
+        // Archive: فقط خبرهای آرشیوی
+        else if (currentSource === 'archived') {
             if (!n.archived) return false;
-        } else if (currentSource !== 'all' && n.sourceId !== currentSource) {
+        }
+        // All: همه
+        else if (currentSource === 'all') {
+            // بدون فیلتر
+        }
+        // Source chip: فقط همون منبع (چه latest چه archived)
+        else if (n.sourceId !== currentSource) {
             return false;
         }
+
         if (currentSearch) {
             const hay = `${n.title || ''} ${n.originalTitle || ''} ${n.summary || ''}`.toLowerCase();
             if (!hay.includes(currentSearch.toLowerCase())) return false;
@@ -210,11 +255,14 @@ function openReader(item) {
     const content = textFor(item, 'content', useOriginal);
     const showToggle = shouldShowToggle(item);
     const paragraphs = splitParagraphs(content);
+    const pubDateLabel = item.pubDate
+        ? new Date(item.pubDate).toLocaleString('fa-IR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : '';
 
     $('readerContent').innerHTML = `
         ${item.image ? `<img class="reader-image" src="${escapeHtml(item.image)}" alt="" onerror="this.style.display='none'">` : ''}
         <div class="reader-body">
-            <div class="reader-source">${escapeHtml(item.sourceName || '')} · ${escapeHtml((item.originalLang || '').toUpperCase())}</div>
+            <div class="reader-source">${escapeHtml(item.sourceName || '')} · ${escapeHtml((item.originalLang || '').toUpperCase())}${pubDateLabel ? ' · ' + escapeHtml(pubDateLabel) : ''}</div>
             <h2 class="reader-title">${escapeHtml(title)}</h2>
             <div class="reader-text">
                 ${paragraphs.map(p => `<p>${escapeHtml(p)}</p>`).join('')}
@@ -272,15 +320,10 @@ async function refresh(manual = false) {
         btn.textContent = 'Refreshing...';
         btn.disabled = true;
     }
-
-    // ask the local server to pull from GitHub (conditional)
     try {
         await fetch('/api/refresh', { cache: 'no-store' }).catch(() => null);
     } catch (e) { /* ignore */ }
-
-    // manual click always re-renders; auto refresh skips if unchanged
     await loadData(manual);
-
     if (btn) {
         btn.textContent = 'Refresh';
         btn.disabled = false;
