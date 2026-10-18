@@ -2,23 +2,31 @@ name: 📰 News Aggregator
 
 on:
   schedule:
-    - cron: '0 */2 * * *'  # هر 2 ساعت یکبار (کاهش مصرف)
+    - cron: '0 */2 * * *'
   workflow_dispatch:
   push:
     branches: [ main ]
     paths:
       - 'scripts/**'
-      
+
 permissions:
   contents: write
+
+# جلوگیری از اجرای هم‌زمان دو workflow که روی git push race می‌کنن
+concurrency:
+  group: news-aggregator
+  cancel-in-progress: false
 
 jobs:
   aggregate-news:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: 📥 Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
 
       - name: 📂 Debug - List all files
         run: |
@@ -26,13 +34,12 @@ jobs:
           ls -la
           ls -la scripts/ || echo "scripts folder not found"
           find . -name "*.js" -type f
-      
+
       - name: 🟢 Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # بدون کش کردن
-      
+
       - name: 📦 Install dependencies (if any)
         run: |
           if [ -f "package.json" ]; then
@@ -40,32 +47,57 @@ jobs:
           else
             echo "No dependencies needed"
           fi
-      
+
       - name: 📁 Create output directory
         run: mkdir -p output
-      
+
       - name: 🌐 Fetch news from all sources
         run: node scripts/fetch-news.js
+        timeout-minutes: 10
         continue-on-error: false
-      
+
       - name: 🤖 Translate to Persian
         run: node scripts/translate-service.js
+        timeout-minutes: 15
         env:
           TRANSLATE_API_URL: "https://translate.argosopentech.com"
           TRANSLATE_CONCURRENCY: "2"
-        continue-on-error: true  # اگر ترجمه failed باشه، کل workflow متوقف نشه
-      
+        continue-on-error: true
+
+      # اگر مرحلهٔ ترجمه کرش کرد، حداقل از temp یک fallback بساز
+      - name: 🛟 Ensure news-data.json exists
+        if: always()
+        run: |
+          if [ ! -f "output/news-data.json" ]; then
+            echo "⚠️ news-data.json missing — creating fallback"
+            if [ -f "output/news-data-temp.json" ]; then
+              node -e '
+                const fs = require("fs");
+                const data = JSON.parse(fs.readFileSync("output/news-data-temp.json", "utf8"));
+                data.translationStats = { totalTranslated: 0, engine: "none", fallback: true };
+                fs.writeFileSync("output/news-data.json", JSON.stringify(data, null, 2));
+              '
+            else
+              echo '{"lastUpdated":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","totalNews":0,"news":[],"stats":{},"translationStats":{"totalTranslated":0,"engine":"none","fallback":true}}' > output/news-data.json
+            fi
+          fi
+
       - name: 📊 Generate report
         run: |
           if [ -f "output/news-data.json" ]; then
+            TOTAL=$(jq '(.totalNews // (.news | length))' output/news-data.json 2>/dev/null || echo 'N/A')
+            TRANSLATED=$(jq '.translationStats.totalTranslated // 0' output/news-data.json 2>/dev/null || echo 'N/A')
+            FAILED=$(jq '[.news[] | select(.translationError == true)] | length' output/news-data.json 2>/dev/null || echo 'N/A')
             echo "## 📊 News Report" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
             echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| Total News | $(jq '.totalNews // .news | length' output/news-data.json 2>/dev/null || echo 'N/A') |" >> $GITHUB_STEP_SUMMARY
+            echo "| Total News | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+            echo "| Translated | $TRANSLATED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Failed Translation | $FAILED |" >> $GITHUB_STEP_SUMMARY
             echo "| Last Updated | $(date '+%Y-%m-%d %H:%M:%S') |" >> $GITHUB_STEP_SUMMARY
           fi
-      
+
       - name: 💾 Save and commit
         run: |
           git config --local user.email "action@github.com"
@@ -75,12 +107,20 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Update news $(date '+%Y%m%d-%H%M%S')"
-            git push
+            for i in 1 2 3; do
+              if git push origin HEAD:main; then
+                echo "✅ Push succeeded on attempt $i"
+                break
+              fi
+              echo "⚠️ Push failed (attempt $i) — rebasing..."
+              git pull --rebase origin main
+              sleep 3
+            done
           fi
-      
+
       - name: 📤 Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: news-data-$(date '+%Y%m%d-%H%M%S')
+          name: news-data-${{ github.run_id }}
           path: output/
           retention-days: 3

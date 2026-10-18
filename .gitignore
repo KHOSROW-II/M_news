@@ -1,0 +1,5 @@
+node_modules/
+output/news-data-temp.json
+*.log
+.DS_Store
+.env
