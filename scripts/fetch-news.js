@@ -5,43 +5,72 @@ const path = require('path');
 const { XMLParser } = require('fast-xml-parser');
 const cheerio = require('cheerio');
 
+// ---------- paths ----------
 const outputDir = path.join(__dirname, '..', 'output');
+const imagesDir = path.join(outputDir, 'images');
 if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+if (!fs.existsSync(imagesDir)) fs.mkdirSync(imagesDir, { recursive: true });
 
 const tempFile = path.join(outputDir, 'news-data-temp.json');
 const fallbackFile = path.join(outputDir, 'news-data.json');
+const archiveFile = path.join(outputDir, 'archive.json');
 
-const MAX_ITEMS_PER_SOURCE = 8;
-const MAX_ARTICLE_FETCHES = 4;
+// ---------- config ----------
+const MAX_ITEMS_PER_SOURCE = 10;
+const MAX_ARTICLE_FETCHES = 6;
 const ARTICLE_TIMEOUT = 12000;
+const IMAGE_TIMEOUT = 10000;
+const MAX_ARCHIVE = 500;
 
 // ---------- sources ----------
+// type 'rss' -> مستقیم از فید RSS
+// type 'html' -> صفحه اصلی رو اسکرپ می‌کنیم
 const SOURCES = [
+  // --- RSS مستقیم (لینک‌ها از قبل معتبرن) ---
   { id: 'bbcpersian', name: 'BBC Persian', lang: 'fa', type: 'rss',
     url: 'https://feeds.bbci.co.uk/persian/rss.xml' },
-  { id: 'radiofarda', name: 'Radio Farda', lang: 'fa', type: 'google',
-    query: 'site:radiofarda.com', gl: 'IR', hl: 'fa' },
-  { id: 'iranintl', name: 'Iran International', lang: 'fa', type: 'google',
-    query: 'site:iranintl.com', gl: 'IR', hl: 'fa' },
+
+  { id: 'dw', name: 'DW Farsi', lang: 'fa', type: 'rss',
+    url: 'https://rss.dw.com/rdf/rss-fa-all' },
+
+  { id: 'rferl', name: 'RFE/RL', lang: 'en', type: 'rss',
+    url: 'https://www.rferl.org/api/zrqiteuuir' },
+
+  { id: 'jpost', name: 'Jerusalem Post', lang: 'en', type: 'rss',
+    url: 'https://www.jpost.com/rss/rssfeedsheadlines.aspx' },
+
+  { id: 'aljazeera', name: 'Al Jazeera', lang: 'en', type: 'rss',
+    url: 'https://www.aljazeera.com/xml/rss/all.xml' },
+
   { id: 'timesofisrael', name: 'Times of Israel', lang: 'en', type: 'rss',
     url: 'https://www.timesofisrael.com/feed/' },
-  { id: 'jpost', name: 'Jerusalem Post', lang: 'en', type: 'rss',
-    url: 'https://rss.jpost.com/rss/rssfeedsheadlines.aspx' },
-  { id: 'c14', name: 'C14', lang: 'he', type: 'google',
-    query: 'site:c14.co.il', gl: 'IL', hl: 'he' },
-  { id: 'rezapahlavi', name: 'Reza Pahlavi', lang: 'en', type: 'google',
-    query: 'site:rezapahlavi.org', gl: 'US', hl: 'en' },
+
+  { id: 'iranintl', name: 'Iran International', lang: 'fa', type: 'rss',
+    url: 'https://www.iranintl.com/fa/rss' },
+
+  // --- HTML scrape ---
+  { id: 'c14', name: 'C14', lang: 'he', type: 'html',
+    url: 'https://www.c14.co.il/',
+    articleSelectors: ['article h2 a', 'article h3 a', 'h2 a', 'h3 a'] },
+
+  { id: 'rezapahlavi', name: 'Reza Pahlavi', lang: 'en', type: 'html',
+    url: 'https://rezapahlavi.org/en/',
+    articleSelectors: ['article h2 a', 'article h3 a', '.entry-title a'] },
 ];
 
 // ---------- http ----------
 function fetchUrl(url, opts = {}) {
-  const { retries = 2, timeout = 15000, maxRedirects = 4 } = opts;
+  const { retries = 2, timeout = 15000, binary = false, maxRedirects = 5 } = opts;
+
   return new Promise((resolve, reject) => {
     let attempt = 0;
     let redirects = 0;
 
     const go = (u) => {
-      const urlObj = new URL(u);
+      let urlObj;
+      try { urlObj = new URL(u); }
+      catch { return reject(new Error('invalid url: ' + u)); }
+
       const lib = urlObj.protocol === 'https:' ? https : http;
       const req = lib.request({
         hostname: urlObj.hostname,
@@ -51,7 +80,7 @@ function fetchUrl(url, opts = {}) {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9,fa;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9,fa;q=0.8,he;q=0.7',
         },
         timeout,
       }, (res) => {
@@ -64,10 +93,12 @@ function fetchUrl(url, opts = {}) {
           if (attempt < retries) { attempt++; return setTimeout(() => go(u), 1500); }
           return reject(new Error(`HTTP ${res.statusCode}`));
         }
-        let data = '';
-        res.setEncoding('utf8');
-        res.on('data', c => data += c);
-        res.on('end', () => resolve(data));
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          resolve(binary ? buf : buf.toString('utf8'));
+        });
       });
       req.on('error', (err) => {
         if (attempt < retries) { attempt++; return setTimeout(() => go(u), 1500); }
@@ -76,19 +107,14 @@ function fetchUrl(url, opts = {}) {
       req.on('timeout', () => req.destroy(new Error('timeout')));
       req.end();
     };
+
     go(url);
   });
 }
 
-// ---------- rss ----------
-const parser = new XMLParser({
-  ignoreAttributes: false,
-  attributeNamePrefix: '@_',
-  cdataPropName: '__cdata',
-  trimValues: true,
-});
-
+// ---------- helpers ----------
 const toArray = (x) => (Array.isArray(x) ? x : (x == null ? [] : [x]));
+
 const textOf = (x) => {
   if (x == null) return '';
   if (typeof x === 'string') return x;
@@ -98,200 +124,331 @@ const textOf = (x) => {
   return '';
 };
 
+function stripHtml(html) {
+  if (!html) return '';
+  return String(html)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function resolveUrl(href, baseUrl) {
+  try { return new URL(href, baseUrl).href; }
+  catch { return ''; }
+}
+
+// ---------- RSS parser ----------
+const parser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  cdataPropName: '__cdata',
+  trimValues: true,
+});
+
+function pickImageFromRss(item) {
+  if (item.enclosure) {
+    for (const e of toArray(item.enclosure)) {
+      if (typeof e === 'object' && e['@_url'] && (e['@_type'] || '').startsWith('image')) return e['@_url'];
+    }
+  }
+  if (item['media:content']) {
+    const m = toArray(item['media:content'])[0];
+    if (m && m['@_url']) return m['@_url'];
+  }
+  if (item['media:thumbnail']) {
+    const m = toArray(item['media:thumbnail'])[0];
+    if (m && m['@_url']) return m['@_url'];
+  }
+  const html = textOf(item['content:encoded']) || textOf(item.description) || '';
+  const m = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+  if (m) return m[1];
+  return '';
+}
+
 function parseRss(xml) {
   const doc = parser.parse(xml);
-  const channel = doc?.rss?.channel;
-  if (channel) {
-    return toArray(channel.item).map(item => ({
+
+  if (doc?.rss?.channel) {
+    return toArray(doc.rss.channel.item).map(item => ({
       title: textOf(item.title),
       link: textOf(item.link) || (item.link && item.link['@_href']) || '',
       pubDate: textOf(item.pubDate),
       description: textOf(item.description),
       content: textOf(item['content:encoded']),
-      image: pickImage(item),
+      image: pickImageFromRss(item),
     }));
   }
-  const feed = doc?.feed;
-  if (feed) {
-    return toArray(feed.entry).map(entry => ({
-      title: textOf(entry.title),
-      link: (entry.link && (entry.link['@_href'] || (Array.isArray(entry.link) && entry.link.find(l => l['@_href'])?.['@_href']))) || '',
-      pubDate: textOf(entry.updated || entry.published),
-      description: textOf(entry.summary),
-      content: textOf(entry.content),
-      image: pickImage(entry),
-    }));
+
+  if (doc?.feed) {
+    return toArray(doc.feed.entry).map(entry => {
+      let link = '';
+      if (typeof entry.link === 'string') link = entry.link;
+      else if (Array.isArray(entry.link)) {
+        const alt = entry.link.find(l => l['@_rel'] === 'alternate') || entry.link[0];
+        link = alt?.['@_href'] || '';
+      } else if (entry.link?.['@_href']) {
+        link = entry.link['@_href'];
+      }
+      return {
+        title: textOf(entry.title),
+        link,
+        pubDate: textOf(entry.updated || entry.published),
+        description: textOf(entry.summary),
+        content: textOf(entry.content),
+        image: pickImageFromRss(entry),
+      };
+    });
   }
+
   return [];
 }
 
-function pickImage(item) {
-  const enc = item.enclosure;
-  if (enc) {
-    const arr = toArray(enc);
-    for (const e of arr) {
-      if (typeof e === 'object' && e['@_url'] && (e['@_type'] || '').startsWith('image')) return e['@_url'];
-    }
-  }
-  const mediaContent = item['media:content'];
-  if (mediaContent) {
-    const m = toArray(mediaContent)[0];
-    if (m && m['@_url']) return m['@_url'];
-  }
-  const mediaThumb = item['media:thumbnail'];
-  if (mediaThumb) {
-    const m = toArray(mediaThumb)[0];
-    if (m && m['@_url']) return m['@_url'];
-  }
-  return '';
-}
-
-function googleNewsUrl(query, gl, hl) {
-  return `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=${hl}&gl=${gl}&ceid=${gl}:${hl}`;
-}
-
-function extractOriginalLinkFromGoogle(description) {
-  if (!description) return '';
-  const m = description.match(/href="([^"]+)"/);
-  return m ? m[1] : '';
-}
-
 // ---------- article extraction ----------
-function stripHtml(html) {
-  if (!html) return '';
-  return String(html).replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
-    .replace(/\s+/g, ' ').trim();
-}
-
-function extractFromArticleHtml(html, articleUrl) {
+function extractArticle(html, articleUrl) {
   const $ = cheerio.load(html);
+
   const ogTitle = $('meta[property="og:title"]').attr('content') || '';
-  const title = ogTitle || $('h1').first().text().trim() || $('title').text().trim();
+  const h1 = $('h1').first().text().trim();
+  const pageTitle = $('title').text().trim();
+  const title = ogTitle || h1 || pageTitle;
 
   let image = $('meta[property="og:image"]').attr('content')
     || $('meta[name="twitter:image"]').attr('content')
     || $('meta[property="twitter:image"]').attr('content')
     || '';
 
-  // content heuristics
-  const selectors = [
-    'article', 'main', '[role="main"]',
-    '.article-body', '.article__body', '.post-content', '.entry-content',
-    '.story-body', '.story', '.content', '#content',
+  // بهترین ظرف محتوا رو پیدا کن
+  const candidates = [
+    'article',
+    'main',
+    '[role="main"]',
+    '.article-body',
+    '.article__body',
+    '.post-content',
+    '.entry-content',
+    '.story-body',
+    '.article-content',
+    '.post-body',
+    '#article-body',
+    '.content',
   ];
+
   let bestText = '';
-  for (const sel of selectors) {
+  for (const sel of candidates) {
     const el = $(sel).first();
-    if (el.length) {
-      const t = el.text().replace(/\s+/g, ' ').trim();
-      if (t.length > bestText.length) bestText = t;
+    if (!el.length) continue;
+    // پاراگراف‌ها رو جدا کن
+    const paras = el.find('p').map((i, p) => $(p).text().trim()).get().filter(t => t.length > 25);
+    const joined = paras.join('\n\n');
+    if (joined.length > bestText.length) bestText = joined;
+    // اگه پاراگراف کم بود، کل متن
+    if (bestText.length < 200) {
+      const allText = el.text().replace(/\s+/g, ' ').trim();
+      if (allText.length > bestText.length) bestText = allText;
     }
   }
+
   if (bestText.length < 200) {
-    // fallback: collect paragraphs
-    const ps = $('p').map((i, el) => $(el).text().trim()).get().filter(t => t.length > 30);
-    const joined = ps.join('\n\n');
-    if (joined.length > bestText.length) bestText = joined;
+    const paras = $('p').map((i, p) => $(p).text().trim()).get().filter(t => t.length > 30);
+    bestText = paras.join('\n\n');
   }
 
   if (!image) {
     const firstImg = $('article img, main img, .content img').first().attr('src');
-    if (firstImg) image = firstImg;
+    if (firstImg) image = resolveUrl(firstImg, articleUrl);
   }
 
-  // resolve relative URLs
-  if (image && !/^https?:\/\//.test(image)) {
-    try { image = new URL(image, articleUrl).href; } catch (e) {}
-  }
+  if (image && !/^https?:\/\//.test(image)) image = resolveUrl(image, articleUrl);
 
   return { title: title.trim(), content: bestText.trim(), image };
 }
 
-async function enrichItem(item) {
-  const rawContent = item.content || item.description || '';
-  const clean = stripHtml(rawContent);
+// ---------- html scraping ----------
+async function scrapeHtmlSource(source) {
+  console.log(`[fetch] ${source.id} (html)`);
+  const html = await fetchUrl(source.url, { timeout: ARTICLE_TIMEOUT });
+  const $ = cheerio.load(html);
 
-  // if RSS already has enough content, don't fetch the page
-  if (clean.length > 300 && item.image) {
-    return { ...item, content: clean, image: item.image };
+  const seen = new Set();
+  const items = [];
+
+  for (const sel of source.articleSelectors) {
+    $(sel).each((i, el) => {
+      if (items.length >= MAX_ITEMS_PER_SOURCE) return;
+
+      const $a = $(el);
+      const href = $a.attr('href');
+      if (!href) return;
+
+      const link = resolveUrl(href, source.url);
+      if (!link || seen.has(link)) return;
+      // فقط لینک‌های داخل همون دامنه
+      try {
+        const u = new URL(link);
+        const s = new URL(source.url);
+        if (u.hostname !== s.hostname) return;
+      } catch { return; }
+
+      const title = $a.text().trim();
+      if (!title || title.length < 10) return;
+
+      seen.add(link);
+      items.push({ title, link, pubDate: new Date().toISOString(), description: '', content: '', image: '' });
+    });
   }
 
-  if (!item.link) {
-    return { ...item, content: clean, image: item.image || '' };
-  }
+  console.log(`[ok] ${source.id}: ${items.length} links`);
+  return items;
+}
 
+// ---------- image download ----------
+function extFromUrl(url) {
   try {
-    const html = await fetchUrl(item.link, { timeout: ARTICLE_TIMEOUT, retries: 1 });
-    const extracted = extractFromArticleHtml(html, item.link);
-    return {
-      ...item,
-      content: extracted.content || clean,
-      image: item.image || extracted.image || '',
-      title: item.title || extracted.title,
-    };
+    const p = new URL(url).pathname;
+    const m = p.match(/\.(jpe?g|png|webp|gif)$/i);
+    return m ? m[1].toLowerCase() : 'jpg';
+  } catch { return 'jpg'; }
+}
+
+async function downloadImage(imageUrl, id) {
+  if (!imageUrl) return '';
+  try {
+    const ext = extFromUrl(imageUrl);
+    const filename = `${id}.${ext}`;
+    const filepath = path.join(imagesDir, filename);
+    if (fs.existsSync(filepath)) return `images/${filename}`;
+    const buf = await fetchUrl(imageUrl, { timeout: IMAGE_TIMEOUT, retries: 1, binary: true });
+    fs.writeFileSync(filepath, buf);
+    return `images/${filename}`;
   } catch (err) {
-    return { ...item, content: clean, image: item.image || '' };
+    console.log(`[img] skip ${imageUrl.slice(0, 60)}: ${err.message}`);
+    return '';
   }
 }
 
-// ---------- concurrency ----------
-async function mapLimit(items, limit, fn) {
-  const results = new Array(items.length);
-  let i = 0;
-  async function worker() {
-    while (true) {
-      const idx = i++;
-      if (idx >= items.length) return;
-      try { results[idx] = await fn(items[idx], idx); }
-      catch (e) { results[idx] = null; }
+// ---------- enrich ----------
+async function enrichItem(item, source) {
+  let link = item.link;
+  let content = stripHtml(item.content || item.description || '');
+  let image = item.image || '';
+  let title = item.title || '';
+
+  // اگه محتوا کم بود، صفحه مقاله رو بگیر
+  if (link && content.length < 400) {
+    try {
+      const html = await fetchUrl(link, { timeout: ARTICLE_TIMEOUT, retries: 1 });
+      const ex = extractArticle(html, link);
+      if (ex.content && ex.content.length > content.length) content = ex.content;
+      if (!image && ex.image) image = ex.image;
+      if (!title && ex.title) title = ex.title;
+    } catch (err) {
+      console.log(`[enrich] fail ${link.slice(0, 60)}: ${err.message}`);
     }
   }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
+
+  const id = `${source.id}-${Buffer.from(link || title).toString('base64').slice(0, 16).replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  const localImage = await downloadImage(image, id);
+
+  return {
+    id,
+    sourceId: source.id,
+    sourceName: source.name,
+    originalTitle: title,
+    title,
+    originalSummary: (content || '').slice(0, 400),
+    summary: (content || '').slice(0, 400),
+    originalContent: content,
+    content,
+    image: localImage,
+    link,
+    pubDate: item.pubDate && !isNaN(new Date(item.pubDate)) ? new Date(item.pubDate).toISOString() : new Date().toISOString(),
+    originalLang: source.lang,
+    needsTranslation: source.lang !== 'fa',
+  };
 }
 
-// ---------- main ----------
+// ---------- source runner ----------
 async function fetchSource(source) {
-  const url = source.type === 'google'
-    ? googleNewsUrl(source.query, source.gl, source.hl)
-    : source.url;
-
-  let xml;
   try {
-    xml = await fetchUrl(url, { timeout: 15000 });
+    let items;
+    if (source.type === 'rss') {
+      console.log(`[fetch] ${source.id} (rss)`);
+      const xml = await fetchUrl(source.url, { timeout: 15000 });
+      items = parseRss(xml).slice(0, MAX_ITEMS_PER_SOURCE);
+      console.log(`[ok] ${source.id}: ${items.length} rss items`);
+    } else {
+      items = (await scrapeHtmlSource(source)).slice(0, MAX_ITEMS_PER_SOURCE);
+    }
+
+    const enriched = [];
+    const toEnrich = items.slice(0, MAX_ARTICLE_FETCHES);
+    const rest = items.slice(MAX_ARTICLE_FETCHES);
+
+    for (let i = 0; i < toEnrich.length; i += 2) {
+      const batch = toEnrich.slice(i, i + 2);
+      const results = await Promise.all(batch.map(it => enrichItem(it, source)));
+      for (const r of results) if (r) enriched.push(r);
+    }
+
+    for (const r of rest) {
+      const id = `${source.id}-${Buffer.from(r.link || r.title).toString('base64').slice(0, 16).replace(/[^a-zA-Z0-9_-]/g, '')}`;
+      enriched.push({
+        id,
+        sourceId: source.id,
+        sourceName: source.name,
+        originalTitle: r.title,
+        title: r.title,
+        originalSummary: stripHtml(r.content || r.description).slice(0, 400),
+        summary: stripHtml(r.content || r.description).slice(0, 400),
+        originalContent: stripHtml(r.content || r.description),
+        content: stripHtml(r.content || r.description),
+        image: r.image || '',
+        link: r.link,
+        pubDate: r.pubDate && !isNaN(new Date(r.pubDate)) ? new Date(r.pubDate).toISOString() : new Date().toISOString(),
+        originalLang: source.lang,
+        needsTranslation: source.lang !== 'fa',
+      });
+    }
+
+    return { source, items: enriched, error: null };
   } catch (err) {
     console.error(`[err] ${source.id}: ${err.message}`);
     return { source, items: [], error: err.message };
   }
-
-  let items = parseRss(xml).slice(0, MAX_ITEMS_PER_SOURCE);
-
-  if (source.type === 'google') {
-    items = items.map(it => ({
-      ...it,
-      link: extractOriginalLinkFromGoogle(it.description) || it.link,
-    })).filter(it => it.link);
-  }
-
-  // enrich top items with full content + image
-  const enriched = [];
-  const toEnrich = items.slice(0, MAX_ARTICLE_FETCHES);
-  const rest = items.slice(MAX_ARTICLE_FETCHES);
-  const detailed = await mapLimit(toEnrich, 2, enrichItem);
-  for (const d of detailed) if (d) enriched.push(d);
-  for (const r of rest) {
-    const clean = stripHtml(r.content || r.description || '');
-    enriched.push({ ...r, content: clean, image: r.image || '' });
-  }
-
-  console.log(`[ok] ${source.id}: ${enriched.length}`);
-  return { source, items: enriched, error: null };
 }
 
+// ---------- archive ----------
+function updateArchive(newItems) {
+  let archive = { news: [] };
+  if (fs.existsSync(archiveFile)) {
+    try { archive = JSON.parse(fs.readFileSync(archiveFile, 'utf8')); }
+    catch { archive = { news: [] }; }
+  }
+  if (!Array.isArray(archive.news)) archive.news = [];
+
+  const existing = new Set(archive.news.map(n => n.id));
+  const fresh = newItems.filter(n => !existing.has(n.id));
+
+  archive.news = [...fresh, ...archive.news].slice(0, MAX_ARCHIVE);
+  archive.lastUpdated = new Date().toISOString();
+  archive.totalNews = archive.news.length;
+
+  fs.writeFileSync(archiveFile, JSON.stringify(archive, null, 2));
+  console.log(`[archive] added ${fresh.length}, total ${archive.news.length}`);
+}
+
+// ---------- main ----------
 async function main() {
   console.log('[start] fetch');
+
   const results = await Promise.all(SOURCES.map(fetchSource));
 
   const allNews = [];
@@ -301,38 +458,18 @@ async function main() {
   for (const r of results) {
     bySource[r.source.id] = r.items.length;
     if (r.error) failedSources.push({ source: r.source.id, error: r.error });
-
-    for (const item of r.items) {
-      const pubDate = item.pubDate && !isNaN(new Date(item.pubDate)) ? new Date(item.pubDate).toISOString() : new Date().toISOString();
-      allNews.push({
-        id: `${r.source.id}-${Buffer.from(item.link || item.title).toString('base64').slice(0, 16)}`,
-        sourceId: r.source.id,
-        sourceName: r.source.name,
-        originalTitle: item.title || '',
-        title: item.title || '',
-        originalSummary: (item.content || '').slice(0, 400),
-        summary: (item.content || '').slice(0, 400),
-        originalContent: item.content || '',
-        content: item.content || '',
-        image: item.image || '',
-        link: item.link || '',
-        pubDate,
-        originalLang: r.source.lang,
-        needsTranslation: r.source.lang !== 'fa',
-      });
-    }
+    allNews.push(...r.items);
   }
 
-  // dedupe by title
+  // حذف تکراری بر اساس id
   const seen = new Set();
   const unique = allNews.filter(n => {
-    const key = (n.originalTitle || '').toLowerCase().trim();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
+    if (!n.id || seen.has(n.id)) return false;
+    seen.add(n.id);
     return true;
   });
 
-  // sort newest first
+  // مرتب‌سازی جدیدترین‌ها اول
   unique.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
 
   const output = {
@@ -349,11 +486,20 @@ async function main() {
   fs.writeFileSync(tempFile, JSON.stringify(output, null, 2));
   fs.writeFileSync(fallbackFile, JSON.stringify({
     ...output,
-    translationStats: { totalTranslated: 0, totalFailed: output.stats.needsTranslation, engine: 'none', fallback: true },
+    translationStats: {
+      totalTranslated: 0,
+      totalFailed: output.stats.needsTranslation,
+      engine: 'none',
+      fallback: true,
+    },
   }, null, 2));
 
+  updateArchive(unique);
+
   console.log(`[save] ${unique.length} items`);
-  if (failedSources.length) console.warn(`[warn] failed: ${failedSources.map(f => f.source).join(', ')}`);
+  if (failedSources.length) {
+    console.warn(`[warn] failed: ${failedSources.map(f => f.source).join(', ')}`);
+  }
 }
 
 main().catch(err => {

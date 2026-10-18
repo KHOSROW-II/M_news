@@ -19,17 +19,14 @@ jobs:
       - name: stage
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force web | Out-Null
-          New-Item -ItemType Directory -Force web\data | Out-Null
-          Copy-Item index.html web\
-          Copy-Item style.css web\
-          Copy-Item script.js web\
-          if (Test-Path output\news-data.json) {
-            Copy-Item output\news-data.json web\data\
-          } else {
-            '{"lastUpdated":null,"totalNews":0,"news":[],"stats":{},"translationStats":{"totalTranslated":0,"engine":"none"}}' |
-              Set-Content web\data\news-data.json -Encoding UTF8
-          }
+            New-Item -ItemType Directory -Force web | Out-Null
+            New-Item -ItemType Directory -Force web\data | Out-Null
+            New-Item -ItemType Directory -Force web\images | Out-Null
+            Copy-Item index.html web\
+            Copy-Item style.css web\
+            Copy-Item script.js web\
+            if (Test-Path output\news-data.json) { Copy-Item output\news-data.json web\data\ }
+            if (Test-Path output\images) { Copy-Item output\images\* web\images\ -Recurse }
 
       - name: deps
         run: |

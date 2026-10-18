@@ -110,7 +110,7 @@ function renderCard(item) {
     const title = textFor(item, 'title', useOriginal);
     const summary = textFor(item, 'summary', useOriginal);
     const showToggle = shouldShowToggle(item);
-    const toggleLabel = useOriginal ? 'Show Persian' : 'Show original';
+    const toggleLabel = useOriginal ? 'نمایش فارسی' : 'نمایش اصل';
     const langLabel = (item.originalLang || '').toUpperCase();
 
     const img = item.image
@@ -163,18 +163,7 @@ function openReader(item) {
     const title = textFor(item, 'title', useOriginal);
     const content = textFor(item, 'content', useOriginal);
     const showToggle = shouldShowToggle(item);
-
     const paragraphs = splitParagraphs(content);
-
-    const toggleBtn = showToggle ? `
-        <button class="btn ${useOriginal ? 'active' : ''}" id="readerToggle" type="button">
-            ${useOriginal ? 'Show Persian' : 'Show original'}
-        </button>
-    ` : '';
-
-    const openBtn = item.link ? `
-        <button class="btn" id="readerOpen" type="button">Open source</button>
-    ` : '';
 
     $('readerContent').innerHTML = `
         ${item.image ? `<img class="reader-image" src="${escapeHtml(item.image)}" alt="" onerror="this.style.display='none'">` : ''}
@@ -186,8 +175,8 @@ function openReader(item) {
             </div>
         </div>
         <div class="reader-actions">
-            ${toggleBtn}
-            ${openBtn}
+            ${showToggle ? `<button class="btn ${useOriginal ? 'active' : ''}" id="readerToggle" type="button">${useOriginal ? 'نمایش فارسی' : 'نمایش اصل'}</button>` : ''}
+            ${item.link ? `<button class="btn" id="readerOpen" type="button">منبع اصلی</button>` : ''}
         </div>
     `;
 

@@ -1,7 +1,7 @@
 {
   "name": "news-aggregator-workflow",
-  "version": "3.0.0",
-  "description": "News aggregator with RSS, full-content extraction, translation and desktop app",
+  "version": "4.0.0",
+  "description": "News aggregator with RSS, full-content extraction, translation, image download, and archive",
   "scripts": {
     "f": "node scripts/fetch-news.js",
     "t": "node scripts/translate-service.js",

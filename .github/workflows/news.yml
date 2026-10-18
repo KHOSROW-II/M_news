@@ -2,10 +2,10 @@ name: news
 
 on:
   schedule:
-    - cron: '0 */1 * * *'
+    - cron: '0 * * * *'
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
       - 'scripts/**'
       - 'package.json'
@@ -35,25 +35,25 @@ jobs:
         run: npm install --no-audit --no-fund
 
       - name: mkdir
-        run: mkdir -p output
+        run: mkdir -p output/images
 
       - name: fetch
         run: node scripts/fetch-news.js
-        timeout-minutes: 15
+        timeout-minutes: 25
 
       - name: translate
         run: node scripts/translate-service.js
-        timeout-minutes: 20
+        timeout-minutes: 25
         env:
-          TRANSLATE_API_URL: "https://translate.argosopentech.com"
-          TRANSLATE_CONCURRENCY: "2"
+          GOOGLE_TRANSLATE_API_KEY: ${{ secrets.GOOGLE_TRANSLATE_API_KEY }}
+          TRANSLATE_CONCURRENCY: '2'
         continue-on-error: true
 
       - name: fallback
         if: always()
         run: |
-          if [ ! -f "output/news-data.json" ]; then
-            if [ -f "output/news-data-temp.json" ]; then
+          if [ ! -f output/news-data.json ]; then
+            if [ -f output/news-data-temp.json ]; then
               node -e '
                 const fs=require("fs");
                 const d=JSON.parse(fs.readFileSync("output/news-data-temp.json","utf8"));
@@ -67,22 +67,26 @@ jobs:
 
       - name: report
         run: |
-          TOTAL=$(jq '(.totalNews // (.news|length))' output/news-data.json 2>/dev/null || echo N/A)
-          TR=$(jq '.translationStats.totalTranslated // 0' output/news-data.json 2>/dev/null || echo N/A)
-          FA=$(jq '[.news[]|select(.translationError==true)]|length' output/news-data.json 2>/dev/null || echo N/A)
+          T=$(jq '(.totalNews // (.news|length))' output/news-data.json 2>/dev/null || echo N/A)
+          R=$(jq '.translationStats.totalTranslated // 0' output/news-data.json 2>/dev/null || echo N/A)
+          F=$(jq '[.news[]|select(.translationError==true)]|length' output/news-data.json 2>/dev/null || echo N/A)
+          A=$(jq '(.totalNews // 0)' output/archive.json 2>/dev/null || echo N/A)
           echo "## Report" >> $GITHUB_STEP_SUMMARY
           echo "| item | value |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| total | $TOTAL |" >> $GITHUB_STEP_SUMMARY
-          echo "| translated | $TR |" >> $GITHUB_STEP_SUMMARY
-          echo "| failed | $FA |" >> $GITHUB_STEP_SUMMARY
+          echo "| current | $T |" >> $GITHUB_STEP_SUMMARY
+          echo "| translated | $R |" >> $GITHUB_STEP_SUMMARY
+          echo "| failed | $F |" >> $GITHUB_STEP_SUMMARY
+          echo "| archive | $A |" >> $GITHUB_STEP_SUMMARY
 
       - name: commit
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add output/news-data.json || true
-          if git diff --staged --quiet; then echo "no changes"; else
+          git add output/news-data.json output/archive.json output/images/ || true
+          if git diff --staged --quiet; then
+            echo "no changes"
+          else
             git commit -m "Update news $(date '+%Y%m%d-%H%M%S')"
             for i in 1 2 3; do
               if git push origin HEAD:main; then break; fi

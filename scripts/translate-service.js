@@ -1,4 +1,5 @@
 const https = require('https');
+const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
@@ -6,16 +7,23 @@ const outputDir = path.join(__dirname, '..', 'output');
 const tempFile = path.join(outputDir, 'news-data-temp.json');
 const outputFile = path.join(outputDir, 'news-data.json');
 
-const TRANSLATE_API = (process.env.TRANSLATE_API_URL || 'https://translate.argosopentech.com').replace(/\/+$/, '');
+const GOOGLE_API_KEY = process.env.GOOGLE_TRANSLATE_API_KEY || '';
+const MYMEMORY_URL = 'https://api.mymemory.translated.net/get';
+const GOOGLE_FREE_URL = 'https://translate.googleapis.com/translate_a/single';
 const CONCURRENCY = Math.max(1, parseInt(process.env.TRANSLATE_CONCURRENCY || '2', 10));
 const MAX_LEN = 450;
 const TIMEOUT = 15000;
 
-function requestJson(url, method = 'GET', body = null) {
+// ---------- http helper ----------
+function request(url, method = 'GET', body = null) {
   return new Promise((resolve) => {
-    const urlObj = new URL(url);
-    const lib = urlObj.protocol === 'https:' ? https : require('http');
+    let urlObj;
+    try { urlObj = new URL(url); }
+    catch { return resolve({ ok: false, error: 'invalid url' }); }
+
+    const lib = urlObj.protocol === 'https:' ? https : http;
     const data = body ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
+
     const req = lib.request({
       hostname: urlObj.hostname,
       port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
@@ -28,8 +36,8 @@ function requestJson(url, method = 'GET', body = null) {
       res.setEncoding('utf8');
       res.on('data', c => raw += c);
       res.on('end', () => {
-        try { resolve({ ok: true, json: JSON.parse(raw) }); }
-        catch { resolve({ ok: false, error: 'invalid json' }); }
+        try { resolve({ ok: true, json: JSON.parse(raw), raw }); }
+        catch { resolve({ ok: false, error: 'invalid json', raw }); }
       });
     });
     req.on('error', (e) => resolve({ ok: false, error: e.message }));
@@ -39,57 +47,62 @@ function requestJson(url, method = 'GET', body = null) {
   });
 }
 
-async function tryLibre(text, source) {
-  if (!TRANSLATE_API) return { ok: false };
-  const res = await requestJson(TRANSLATE_API + '/translate', 'POST', {
-    q: text, source, target: 'fa', format: 'text',
-  });
-  if (res.ok && res.json?.translatedText && typeof res.json.translatedText === 'string') {
-    return { ok: true, text: res.json.translatedText, engine: 'libre' };
-  }
-  return { ok: false };
+// ---------- engines ----------
+async function tryGoogleCloud(text, src) {
+  if (!GOOGLE_API_KEY) return { ok: false, error: 'no api key' };
+  const url = `https://translation.googleapis.com/language/translate/v2?key=${GOOGLE_API_KEY}`;
+  const res = await request(url, 'POST', { q: text, source: src, target: 'fa', format: 'text' });
+  const t = res.ok && res.json?.data?.translations?.[0]?.translatedText;
+  if (t) return { ok: true, text: t, engine: 'google-cloud' };
+  return { ok: false, error: 'google-cloud failed' };
 }
 
-async function tryMyMemory(text, source) {
-  const lang = source === 'he' ? 'he' : source;
-  const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${lang}|fa`;
-  const res = await requestJson(url);
-  const t = res.ok && res.json?.responseData?.translatedText;
-  if (t && typeof t === 'string' && !/MYMEMORY WARNING/i.test(t)) {
-    return { ok: true, text: t, engine: 'mymemory' };
-  }
-  return { ok: false };
-}
-
-async function tryGoogle(text, source) {
-  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${source}&tl=fa&dt=t&q=${encodeURIComponent(text)}`;
-  const res = await requestJson(url);
+async function tryGoogleFree(text, src) {
+  const url = `${GOOGLE_FREE_URL}?client=gtx&sl=${src}&tl=fa&dt=t&q=${encodeURIComponent(text)}`;
+  const res = await request(url);
   if (res.ok && Array.isArray(res.json) && Array.isArray(res.json[0])) {
     const t = res.json[0].map(x => x?.[0] || '').join('');
-    if (t) return { ok: true, text: t, engine: 'google' };
+    if (t) return { ok: true, text: t, engine: 'google-free' };
   }
-  return { ok: false };
+  return { ok: false, error: 'google-free failed' };
 }
 
-async function translateChunk(text, source) {
-  if (!text) return { ok: true, text: '' };
-  if (source === 'fa') return { ok: true, text };
-  const truncated = text.length > MAX_LEN ? text.slice(0, MAX_LEN) : text;
-  for (const fn of [tryLibre, tryMyMemory, tryGoogle]) {
+async function tryMyMemory(text, src) {
+  const lang = src === 'he' ? 'he' : src;
+  const url = `${MYMEMORY_URL}?q=${encodeURIComponent(text)}&langpair=${lang}|fa`;
+  const res = await request(url);
+  const t = res.ok && res.json?.responseData?.translatedText;
+  if (t && typeof t === 'string' && !/MYMEMORY WARNING/i.test(t) && !/QUERY LENGTH LIMIT/i.test(t)) {
+    return { ok: true, text: t, engine: 'mymemory' };
+  }
+  return { ok: false, error: 'mymemory failed' };
+}
+
+// ترتیب: Google Cloud (اگه کلید هست) → Google Free → MyMemory
+async function translateChunk(text, src) {
+  if (!text || src === 'fa') return { ok: true, text };
+  const t = text.length > MAX_LEN ? text.slice(0, MAX_LEN) : text;
+
+  const engines = [];
+  if (GOOGLE_API_KEY) engines.push(tryGoogleCloud);
+  engines.push(tryGoogleFree);
+  engines.push(tryMyMemory);
+
+  for (const fn of engines) {
     try {
-      const r = await fn(truncated, source);
+      const r = await fn(t, src);
       if (r.ok) return r;
     } catch (e) { /* continue */ }
   }
   return { ok: false, text, error: 'all engines failed' };
 }
 
-async function translateLong(text, source) {
+// متن بلند رو به جمله‌های کوتاه بشکن
+async function translateLong(text, src) {
   if (!text) return { ok: true, text: '' };
-  if (source === 'fa') return { ok: true, text };
-  if (text.length <= MAX_LEN) return translateChunk(text, source);
+  if (src === 'fa') return { ok: true, text };
+  if (text.length <= MAX_LEN) return translateChunk(text, src);
 
-  // split into sentences/lines, translate each, join
   const parts = text.match(/[^.!?\n]+[.!?\n]?/g) || [text];
   const chunks = [];
   let buf = '';
@@ -103,34 +116,38 @@ async function translateLong(text, source) {
 
   const out = [];
   let anyOk = false;
-  for (const c of chunks.slice(0, 6)) { // cap per article
-    const r = await translateChunk(c, source);
-    if (r.ok) anyOk = true;
+  let engine = 'none';
+  for (const c of chunks.slice(0, 8)) {
+    const r = await translateChunk(c, src);
+    if (r.ok) { anyOk = true; engine = r.engine || engine; }
     out.push(r.ok ? r.text : c);
   }
   if (!anyOk) return { ok: false, text, error: 'all engines failed' };
-  return { ok: true, text: out.join(' ') };
+  return { ok: true, text: out.join(' '), engine };
 }
 
+// ---------- item ----------
 async function translateItem(item) {
   if (!item.needsTranslation || item.originalLang === 'fa') {
     item.translated = false;
     return;
   }
 
-  const titleRes = await translateLong(item.originalTitle || '', item.originalLang);
-  const contentChunk = (item.originalContent || item.originalSummary || '').slice(0, 1500);
-  const contentRes = await translateLong(contentChunk, item.originalLang);
+  const t = await translateLong(item.originalTitle || '', item.originalLang);
+  const c = await translateLong((item.originalContent || '').slice(0, 1500), item.originalLang);
 
-  item.title = titleRes.ok ? titleRes.text : item.originalTitle;
-  item.content = contentRes.ok ? contentRes.text : (item.originalContent || contentChunk);
-  item.summary = (contentRes.ok ? contentRes.text : (item.originalSummary || contentChunk)).slice(0, 280);
+  item.title = t.ok ? t.text : item.originalTitle;
+  item.content = c.ok ? c.text : (item.originalContent || '');
+  item.summary = (c.ok ? c.text : (item.originalContent || '')).slice(0, 280);
 
-  item.translated = titleRes.ok && contentRes.ok;
-  item.translationError = !item.translated;
-  item.translationNote = item.translated ? 'ترجمه ماشینی' : 'ترجمه ناموفق - متن اصلی';
+  const ok = t.ok && c.ok;
+  item.translated = ok;
+  item.translationError = !ok;
+  item.translationNote = ok ? 'ترجمه ماشینی' : 'ترجمه ناموفق';
+  if (ok) item.translationEngine = c.engine || t.engine;
 }
 
+// ---------- concurrency ----------
 async function mapLimit(items, limit, fn) {
   let i = 0;
   async function worker() {
@@ -143,29 +160,29 @@ async function mapLimit(items, limit, fn) {
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
 
-function writeEmpty(reason) {
-  fs.writeFileSync(outputFile, JSON.stringify({
-    lastUpdated: new Date().toISOString(),
-    totalNews: 0, news: [], stats: {},
-    translationStats: { totalTranslated: 0, totalFailed: 0, engine: 'none', fallback: true, error: reason },
-  }, null, 2));
-}
-
+// ---------- main ----------
 async function main() {
   console.log('[start] translate');
+  console.log(`[info] google-cloud: ${GOOGLE_API_KEY ? 'yes' : 'no'}`);
+
   let data = null;
   try {
     if (fs.existsSync(tempFile)) data = JSON.parse(fs.readFileSync(tempFile, 'utf8'));
     else if (fs.existsSync(outputFile)) data = JSON.parse(fs.readFileSync(outputFile, 'utf8'));
-  } catch (err) { console.error('[err] read:', err.message); }
+  } catch (e) { console.error('[err] read:', e.message); }
 
   if (!data || !Array.isArray(data.news)) {
     console.error('[err] no input');
-    writeEmpty('no input');
+    fs.writeFileSync(outputFile, JSON.stringify({
+      lastUpdated: new Date().toISOString(),
+      totalNews: 0, news: [], stats: {},
+      translationStats: { totalTranslated: 0, totalFailed: 0, engine: 'none', error: 'no input' },
+    }, null, 2));
     return;
   }
 
   console.log(`[load] ${data.news.length} items`);
+
   let translated = 0;
   await mapLimit(data.news, CONCURRENCY, async (item) => {
     await translateItem(item);
@@ -173,13 +190,14 @@ async function main() {
   });
 
   const failed = data.news.filter(n => n.translationError === true).length;
+
   fs.writeFileSync(outputFile, JSON.stringify({
     ...data,
     lastUpdated: new Date().toISOString(),
     translationStats: {
       totalTranslated: translated,
       totalFailed: failed,
-      engine: 'libre+mymemory+google',
+      engine: GOOGLE_API_KEY ? 'google-cloud+google-free+mymemory' : 'google-free+mymemory',
       concurrency: CONCURRENCY,
     },
   }, null, 2));
@@ -190,12 +208,5 @@ async function main() {
 
 main().catch(err => {
   console.error('[fatal]', err);
-  try {
-    if (!fs.existsSync(outputFile) && fs.existsSync(tempFile)) {
-      const d = JSON.parse(fs.readFileSync(tempFile, 'utf8'));
-      d.translationStats = { totalTranslated: 0, engine: 'none', fallback: true, error: err.message };
-      fs.writeFileSync(outputFile, JSON.stringify(d, null, 2));
-    }
-  } catch (e) { writeEmpty('crash'); }
   process.exit(0);
 });

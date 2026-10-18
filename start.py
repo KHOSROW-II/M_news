@@ -36,7 +36,7 @@ FROZEN = getattr(sys, "frozen", False)
 
 if FROZEN:
     BASE_DIR = Path(sys._MEIPASS)
-    WEB_DIR = BASE_DIR / "web"
+    WEB_DIR = BASE_DIR / "web, output/images/"
 else:
     BASE_DIR = Path(__file__).resolve().parent
     WEB_DIR = BASE_DIR
@@ -152,15 +152,37 @@ def do_fetch():
 
     with _refresh_lock:
         try:
-            req = urllib.request.Request(RAW_NEWS_URL, headers={"User-Agent": "NewsAggregator/3.0"})
+            req = urllib.request.Request(RAW_NEWS_URL, headers={"User-Agent": "NewsAggregator/4.0"})
             with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
                 raw = resp.read().decode("utf-8")
             parsed = json.loads(raw)
             if not isinstance(parsed.get("news"), list):
                 raise ValueError("invalid payload")
             CACHE_DATA.write_text(raw, encoding="utf-8")
+
+            # دانلود تصاویر جدید
+            img_dir = CACHE_DIR / "images"
+            img_dir.mkdir(exist_ok=True)
+            base_url = RAW_NEWS_URL.rsplit("/", 1)[0]  # output/
+            downloaded = 0
+            for item in parsed["news"]:
+                img = item.get("image") or ""
+                if not img.startswith("images/"):
+                    continue
+                local = img_dir / img.split("/")[-1]
+                if local.exists():
+                    continue
+                try:
+                    img_url = base_url + "/" + img
+                    r2 = urllib.request.Request(img_url, headers={"User-Agent": "NewsAggregator/4.0"})
+                    with urllib.request.urlopen(r2, timeout=10) as ir:
+                        local.write_bytes(ir.read())
+                    downloaded += 1
+                except Exception:
+                    pass
+
             _last_refresh = {"ok": True, "message": "updated", "count": len(parsed["news"]), "ts": time.time()}
-            return True, f"{len(parsed['news'])} stories"
+            return True, f"{len(parsed['news'])} stories, {downloaded} images"
         except Exception as exc:
             _last_refresh = {"ok": False, "message": str(exc), "count": 0, "ts": time.time()}
             return False, str(exc)
@@ -202,25 +224,37 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_GET(self):
-        if self.path.startswith("/output/news-data.json"):
-            news = resolve_news_file()
-            if not news:
-                return self._send_json({"news": [], "lastUpdated": None, "translationStats": {}}, 404)
-            data = news.read_bytes()
+def do_GET(self):
+    if self.path.startswith("/output/news-data.json"):
+        # ... like before
+    
+    if self.path.startswith("/images/"):
+        name = self.path.split("/images/", 1)[1].split("?")[0]
+        file = (CACHE_DIR / "images" / name)
+        if file.exists():
+            data = file.read_bytes()
+            ext = name.rsplit(".", 1)[-1].lower()
+            mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}.get(ext, "application/octet-stream")
             self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Type", mime)
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", "public, max-age=3600")
             self.end_headers()
             self.wfile.write(data)
             return
-        if self.path.startswith("/api/refresh"):
-            ok, msg = do_fetch()
-            return self._send_json({"ok": ok, "message": msg, **_last_refresh})
-        if self.path.startswith("/api/status"):
-            return self._send_json(_last_refresh)
-        super().do_GET()
+        # fallback: try bundled
+        fallback = WEB_DIR / "images" / name
+        if fallback.exists():
+            data = fallback.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        self.send_error(404)
+        return
+    
 
     def log_message(self, *args):
         pass
