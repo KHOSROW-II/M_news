@@ -1,9 +1,37 @@
 {
-  "lastUpdated": "2026-10-18T16:59:48.243Z",
+  "lastUpdated": "2026-10-18T18:06:15.691Z",
   "totalNews": 12,
   "news": [
     {
-      "id": "iran-1792342780677-0",
+      "id": "iran-1792346771257-0",
+      "sourceId": "iranintl",
+      "sourceName": "ایران اینترنشنال",
+      "originalTitle": "ادامه ناآرامی‌ها در فرانسه؛ پلیس و معترضان بار دیگر در پاریس درگیر شدند",
+      "title": "ادامه ناآرامی‌ها در فرانسه؛ پلیس و معترضان بار دیگر در پاریس درگیر شدند",
+      "originalSummary": "ادامه ناآرامی‌ها در فرانسه؛ پلیس و معترضان بار دیگر در پاریس درگیر شدند",
+      "summary": "ادامه ناآرامی‌ها در فرانسه؛ پلیس و معترضان بار دیگر در پاریس درگیر شدند",
+      "link": "https://www.iranintl.com/fa/latest",
+      "pubDate": "2026-10-18T18:06:11.257Z",
+      "originalLang": "fa",
+      "needsTranslation": false,
+      "translated": false
+    },
+    {
+      "id": "iran-1792346771257-1",
+      "sourceId": "iranintl",
+      "sourceName": "ایران اینترنشنال",
+      "originalTitle": "سقوط بالگرد عربستان سعودی و حمله حوثی‌ها به نجران ۲ کشته و ۶ زخمی بر جای گذاشت",
+      "title": "سقوط بالگرد عربستان سعودی و حمله حوثی‌ها به نجران ۲ کشته و ۶ زخمی بر جای گذاشت",
+      "originalSummary": "سقوط بالگرد عربستان سعودی و حمله حوثی‌ها به نجران ۲ کشته و ۶ زخمی بر جای گذاشت",
+      "summary": "سقوط بالگرد عربستان سعودی و حمله حوثی‌ها به نجران ۲ کشته و ۶ زخمی بر جای گذاشت",
+      "link": "https://www.iranintl.com/fa/latest",
+      "pubDate": "2026-10-18T18:06:11.257Z",
+      "originalLang": "fa",
+      "needsTranslation": false,
+      "translated": false
+    },
+    {
+      "id": "iran-1792346771257-2",
       "sourceId": "iranintl",
       "sourceName": "ایران اینترنشنال",
       "originalTitle": "دو مدرس دانشگاه تهران در پی انتقاد از خامنه‌ای و سوابق رسانه‌ای از تدریس محروم شدند",
@@ -11,13 +39,13 @@
       "originalSummary": "دو مدرس دانشگاه تهران در پی انتقاد از خامنه‌ای و سوابق رسانه‌ای از تدریس محروم شدند",
       "summary": "دو مدرس دانشگاه تهران در پی انتقاد از خامنه‌ای و سوابق رسانه‌ای از تدریس محروم شدند",
       "link": "https://www.iranintl.com/fa/latest",
-      "pubDate": "2026-10-18T16:59:40.677Z",
+      "pubDate": "2026-10-18T18:06:11.257Z",
       "originalLang": "fa",
       "needsTranslation": false,
       "translated": false
     },
     {
-      "id": "iran-1792342780677-1",
+      "id": "iran-1792346771257-3",
       "sourceId": "iranintl",
       "sourceName": "ایران اینترنشنال",
       "originalTitle": "ترامپ در آستانه انتخابات اسرائیل حمایت کامل خود را از نتانیاهو اعلام کرد",
@@ -25,13 +53,13 @@
       "originalSummary": "ترامپ در آستانه انتخابات اسرائیل حمایت کامل خود را از نتانیاهو اعلام کرد",
       "summary": "ترامپ در آستانه انتخابات اسرائیل حمایت کامل خود را از نتانیاهو اعلام کرد",
       "link": "https://www.iranintl.com/fa/latest",
-      "pubDate": "2026-10-18T16:59:40.677Z",
+      "pubDate": "2026-10-18T18:06:11.257Z",
       "originalLang": "fa",
       "needsTranslation": false,
       "translated": false
     },
     {
-      "id": "iran-1792342780677-2",
+      "id": "iran-1792346771257-4",
       "sourceId": "iranintl",
       "sourceName": "ایران اینترنشنال",
       "originalTitle": "زلنسکی از رایزنی با فرستادگان ترامپ برای برگزاری دور تازه مذاکرات صلح خبر داد",
@@ -39,13 +67,13 @@
       "originalSummary": "زلنسکی از رایزنی با فرستادگان ترامپ برای برگزاری دور تازه مذاکرات صلح خبر داد",
       "summary": "زلنسکی از رایزنی با فرستادگان ترامپ برای برگزاری دور تازه مذاکرات صلح خبر داد",
       "link": "https://www.iranintl.com/fa/latest",
-      "pubDate": "2026-10-18T16:59:40.677Z",
+      "pubDate": "2026-10-18T18:06:11.257Z",
       "originalLang": "fa",
       "needsTranslation": false,
       "translated": false
     },
     {
-      "id": "iran-1792342780677-3",
+      "id": "iran-1792346771257-5",
       "sourceId": "iranintl",
       "sourceName": "ایران اینترنشنال",
       "originalTitle": "بازنشستگان در شهرهای مختلف ایران علیه مشکلات معیشتی و سرکوب تجمع کردند",
@@ -53,13 +81,13 @@
       "originalSummary": "بازنشستگان در شهرهای مختلف ایران علیه مشکلات معیشتی و سرکوب تجمع کردند",
       "summary": "بازنشستگان در شهرهای مختلف ایران علیه مشکلات معیشتی و سرکوب تجمع کردند",
       "link": "https://www.iranintl.com/fa/latest",
-      "pubDate": "2026-10-18T16:59:40.677Z",
+      "pubDate": "2026-10-18T18:06:11.257Z",
       "originalLang": "fa",
       "needsTranslation": false,
       "translated": false
     },
     {
-      "id": "iran-1792342780677-4",
+      "id": "iran-1792346771257-6",
       "sourceId": "iranintl",
       "sourceName": "ایران اینترنشنال",
       "originalTitle": "هوش مصنوعی در خدمت رمزگشایی از اسناد تاریخی؛ از ارتش نازی تا دوران ناپلئون",
@@ -67,13 +95,13 @@
       "originalSummary": "هوش مصنوعی در خدمت رمزگشایی از اسناد تاریخی؛ از ارتش نازی تا دوران ناپلئون",
       "summary": "هوش مصنوعی در خدمت رمزگشایی از اسناد تاریخی؛ از ارتش نازی تا دوران ناپلئون",
       "link": "https://www.iranintl.com/fa/latest",
-      "pubDate": "2026-10-18T16:59:40.677Z",
+      "pubDate": "2026-10-18T18:06:11.257Z",
       "originalLang": "fa",
       "needsTranslation": false,
       "translated": false
     },
     {
-      "id": "iran-1792342780677-5",
+      "id": "iran-1792346771257-7",
       "sourceId": "iranintl",
       "sourceName": "ایران اینترنشنال",
       "originalTitle": "مهرداد اخلاقی کیست؛ معمار موشک‌های سپاه به وزارت دفاع رسید",
@@ -81,98 +109,78 @@
       "originalSummary": "مهرداد اخلاقی کیست؛ معمار موشک‌های سپاه به وزارت دفاع رسید",
       "summary": "مهرداد اخلاقی کیست؛ معمار موشک‌های سپاه به وزارت دفاع رسید",
       "link": "https://www.iranintl.com/fa/latest",
-      "pubDate": "2026-10-18T16:59:40.677Z",
+      "pubDate": "2026-10-18T18:06:11.257Z",
       "originalLang": "fa",
       "needsTranslation": false,
       "translated": false
     },
     {
-      "id": "iran-1792342780677-6",
-      "sourceId": "iranintl",
-      "sourceName": "ایران اینترنشنال",
-      "originalTitle": "فرانسه: خوانشی از یک انحطاط",
-      "title": "فرانسه: خوانشی از یک انحطاط",
-      "originalSummary": "فرانسه: خوانشی از یک انحطاط",
-      "summary": "فرانسه: خوانشی از یک انحطاط",
-      "link": "https://www.iranintl.com/fa/latest",
-      "pubDate": "2026-10-18T16:59:40.677Z",
-      "originalLang": "fa",
-      "needsTranslation": false,
-      "translated": false
-    },
-    {
-      "id": "iran-1792342780677-7",
-      "sourceId": "iranintl",
-      "sourceName": "ایران اینترنشنال",
-      "originalTitle": "ناآرامی‌های فرانسه یک کشته و صدها بازداشتی بر جا گذاشت",
-      "title": "ناآرامی‌های فرانسه یک کشته و صدها بازداشتی بر جا گذاشت",
-      "originalSummary": "ناآرامی‌های فرانسه یک کشته و صدها بازداشتی بر جا گذاشت",
-      "summary": "ناآرامی‌های فرانسه یک کشته و صدها بازداشتی بر جا گذاشت",
-      "link": "https://www.iranintl.com/fa/latest",
-      "pubDate": "2026-10-18T16:59:40.677Z",
-      "originalLang": "fa",
-      "needsTranslation": false,
-      "translated": false
-    },
-    {
-      "id": "reza-1792342780085-0",
+      "id": "reza-1792346771065-0",
       "sourceId": "rezapahlavi",
       "sourceName": "رضا پهلوی",
       "originalTitle": "Reza Pahlavi",
-      "title": "[en] Reza Pahlavi",
+      "title": "Reza Pahlavi",
       "originalSummary": "Reza Pahlavi",
-      "summary": "[en] Reza Pahlavi",
+      "summary": "Reza Pahlavi",
       "link": "https://rezapahlavi.org/en",
-      "pubDate": "2026-10-18T16:59:40.085Z",
+      "pubDate": "2026-10-18T18:06:11.065Z",
       "originalLang": "en",
       "needsTranslation": true,
-      "translated": true,
-      "translationNote": "ترجمه شده با ماشین"
+      "translated": false,
+      "translationError": true,
+      "translationNote": "ترجمه ناموفق — متن اصلی نمایش داده می‌شود",
+      "translationErrorDetail": "title: getaddrinfo ENOTFOUND translate.argosopentech.com | summary: getaddrinfo ENOTFOUND translate.argosopentech.com"
     },
     {
-      "id": "reza-1792342780085-1",
+      "id": "reza-1792346771065-1",
       "sourceId": "rezapahlavi",
       "sourceName": "رضا پهلوی",
       "originalTitle": "With the people, for Iran",
-      "title": "[en] With the people, for Iran",
+      "title": "With the people, for Iran",
       "originalSummary": "With the people, for Iran",
-      "summary": "[en] With the people, for Iran",
+      "summary": "With the people, for Iran",
       "link": "https://rezapahlavi.org/en",
-      "pubDate": "2026-10-18T16:59:40.085Z",
+      "pubDate": "2026-10-18T18:06:11.065Z",
       "originalLang": "en",
       "needsTranslation": true,
-      "translated": true,
-      "translationNote": "ترجمه شده با ماشین"
+      "translated": false,
+      "translationError": true,
+      "translationNote": "ترجمه ناموفق — متن اصلی نمایش داده می‌شود",
+      "translationErrorDetail": "title: getaddrinfo ENOTFOUND translate.argosopentech.com | summary: getaddrinfo ENOTFOUND translate.argosopentech.com"
     },
     {
-      "id": "reza-1792342780085-2",
+      "id": "reza-1792346771065-2",
       "sourceId": "rezapahlavi",
       "sourceName": "رضا پهلوی",
       "originalTitle": "Latest Statements",
-      "title": "[en] Latest Statements",
+      "title": "Latest Statements",
       "originalSummary": "Latest Statements",
-      "summary": "[en] Latest Statements",
+      "summary": "Latest Statements",
       "link": "https://rezapahlavi.org/en",
-      "pubDate": "2026-10-18T16:59:40.085Z",
+      "pubDate": "2026-10-18T18:06:11.065Z",
       "originalLang": "en",
       "needsTranslation": true,
-      "translated": true,
-      "translationNote": "ترجمه شده با ماشین"
+      "translated": false,
+      "translationError": true,
+      "translationNote": "ترجمه ناموفق — متن اصلی نمایش داده می‌شود",
+      "translationErrorDetail": "title: getaddrinfo ENOTFOUND translate.argosopentech.com | summary: getaddrinfo ENOTFOUND translate.argosopentech.com"
     },
     {
-      "id": "reza-1792342780085-3",
+      "id": "reza-1792346771065-3",
       "sourceId": "rezapahlavi",
       "sourceName": "رضا پهلوی",
       "originalTitle": "In the News",
-      "title": "[en] In the News",
+      "title": "In the News",
       "originalSummary": "In the News",
-      "summary": "[en] In the News",
+      "summary": "In the News",
       "link": "https://rezapahlavi.org/en",
-      "pubDate": "2026-10-18T16:59:40.085Z",
+      "pubDate": "2026-10-18T18:06:11.065Z",
       "originalLang": "en",
       "needsTranslation": true,
-      "translated": true,
-      "translationNote": "ترجمه شده با ماشین"
+      "translated": false,
+      "translationError": true,
+      "translationNote": "ترجمه ناموفق — متن اصلی نمایش داده می‌شود",
+      "translationErrorDetail": "title: getaddrinfo ENOTFOUND translate.argosopentech.com | summary: getaddrinfo ENOTFOUND translate.argosopentech.com"
     }
   ],
   "stats": {
@@ -181,10 +189,19 @@
       "iranintl": 8,
       "rezapahlavi": 4
     },
-    "needsTranslation": 4
+    "needsTranslation": 4,
+    "failedSources": [
+      {
+        "source": "c14",
+        "error": "HTTP 403"
+      }
+    ]
   },
   "translationStats": {
-    "totalTranslated": 4,
-    "engine": "LibreTranslate"
+    "totalTranslated": 0,
+    "totalFailed": 4,
+    "engine": "LibreTranslate",
+    "apiUrl": "https://translate.argosopentech.com",
+    "concurrency": 2
   }
 }
