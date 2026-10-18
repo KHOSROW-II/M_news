@@ -58,32 +58,38 @@ jobs:
           }
 
           if (Test-Path output\archive.json) {
-            node -e "
-              const fs = require('fs');
-              const d = JSON.parse(fs.readFileSync('output/archive.json', 'utf8'));
-              d.news = (d.news || []).slice(0, 100);
-              d.totalNews = d.news.length;
-              fs.writeFileSync('web/data/archive.json', JSON.stringify(d, null, 2));
-            "
+            $arch = Get-Content output\archive.json -Raw | ConvertFrom-Json
+            $trimmed = [PSCustomObject]@{
+              lastUpdated = $arch.lastUpdated
+              totalNews = [Math]::Min(100, @($arch.news).Count)
+              news = @($arch.news | Select-Object -First 100)
+            }
+            $trimmed | ConvertTo-Json -Depth 100 |
+              Set-Content web\data\archive.json -Encoding UTF8
           } else {
             '{"news":[],"totalNews":0}' | Set-Content web\data\archive.json -Encoding UTF8
           }
 
           if (Test-Path output\images) {
             $keep = @()
-            if (Test-Path web\data\news-data.json) {
-              $cur = Get-Content web\data\news-data.json -Raw | ConvertFrom-Json
-              foreach ($n in $cur.news) { if ($n.image) { $keep += ($n.image -split '/')[-1] } }
+            $cur = Get-Content web\data\news-data.json -Raw | ConvertFrom-Json
+            foreach ($n in $cur.news) {
+              if ($n.image) { $keep += ($n.image -split '/')[-1] }
             }
-            if (Test-Path web\data\archive.json) {
-              $arch = Get-Content web\data\archive.json -Raw | ConvertFrom-Json
-              foreach ($n in $arch.news) { if ($n.image) { $keep += ($n.image -split '/')[-1] } }
+            $arch2 = Get-Content web\data\archive.json -Raw | ConvertFrom-Json
+            foreach ($n in $arch2.news) {
+              if ($n.image) { $keep += ($n.image -split '/')[-1] }
             }
             $keep = $keep | Select-Object -Unique
+            $copied = 0
             foreach ($f in $keep) {
               $src = Join-Path output\images $f
-              if (Test-Path $src) { Copy-Item $src web\images\ }
+              if (Test-Path $src) {
+                Copy-Item $src web\images\
+                $copied++
+              }
             }
+            Write-Host "Copied $copied images to web/images"
           }
 
       - name: deps
@@ -94,19 +100,22 @@ jobs:
       - name: icon
         shell: pwsh
         run: |
-          python -c "
-import os
-from PIL import Image, ImageDraw
-os.makedirs('build', exist_ok=True)
-img = Image.new('RGBA', (256, 256), (17, 24, 39, 255))
-d = ImageDraw.Draw(img)
-d.rectangle([48, 80, 208, 92], fill=(255, 255, 255, 255))
-d.rectangle([48, 116, 208, 128], fill=(209, 213, 219, 255))
-d.rectangle([48, 152, 168, 164], fill=(209, 213, 219, 255))
-d.rectangle([48, 188, 188, 200], fill=(209, 213, 219, 255))
-img.save('build/app.png')
-img.save('build/app.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
-          "
+          @'
+          import os
+          from PIL import Image, ImageDraw
+          os.makedirs("build", exist_ok=True)
+          img = Image.new("RGBA", (256, 256), (17, 24, 39, 255))
+          d = ImageDraw.Draw(img)
+          d.rectangle([48, 80, 208, 92], fill=(255, 255, 255, 255))
+          d.rectangle([48, 116, 208, 128], fill=(209, 213, 219, 255))
+          d.rectangle([48, 152, 168, 164], fill=(209, 213, 219, 255))
+          d.rectangle([48, 188, 188, 200], fill=(209, 213, 219, 255))
+          img.save("build/app.png")
+          img.save("build/app.ico", sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
+          print("icon written:", os.path.abspath("build/app.ico"))
+          '@ | Set-Content -Path make-icon.py -Encoding UTF8
+          python make-icon.py
+          Remove-Item make-icon.py
 
       - name: package
         shell: pwsh
@@ -118,6 +127,11 @@ img.save('build/app.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,
             --hidden-import webview.platforms.edgechromium `
             --hidden-import webview.platforms.winforms `
             start.py
+          if (-not (Test-Path dist\start.exe)) {
+            Write-Error "start.exe not found after build"
+            exit 1
+          }
+          Get-Item dist\start.exe | Format-List Name, Length
 
       - name: upload-artifact
         uses: actions/upload-artifact@v4
