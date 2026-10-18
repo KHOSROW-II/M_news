@@ -1,0 +1,99 @@
+name: news
+
+on:
+  schedule:
+    - cron: '0 */1 * * *'
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'scripts/**'
+      - 'package.json'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: news-aggregator
+  cancel-in-progress: false
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: install
+        run: npm install --no-audit --no-fund
+
+      - name: mkdir
+        run: mkdir -p output
+
+      - name: fetch
+        run: node scripts/fetch-news.js
+        timeout-minutes: 15
+
+      - name: translate
+        run: node scripts/translate-service.js
+        timeout-minutes: 20
+        env:
+          TRANSLATE_API_URL: "https://translate.argosopentech.com"
+          TRANSLATE_CONCURRENCY: "2"
+        continue-on-error: true
+
+      - name: fallback
+        if: always()
+        run: |
+          if [ ! -f "output/news-data.json" ]; then
+            if [ -f "output/news-data-temp.json" ]; then
+              node -e '
+                const fs=require("fs");
+                const d=JSON.parse(fs.readFileSync("output/news-data-temp.json","utf8"));
+                d.translationStats={totalTranslated:0,engine:"none",fallback:true};
+                fs.writeFileSync("output/news-data.json",JSON.stringify(d,null,2));
+              '
+            else
+              echo '{"lastUpdated":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","totalNews":0,"news":[],"stats":{},"translationStats":{"totalTranslated":0,"engine":"none","fallback":true}}' > output/news-data.json
+            fi
+          fi
+
+      - name: report
+        run: |
+          TOTAL=$(jq '(.totalNews // (.news|length))' output/news-data.json 2>/dev/null || echo N/A)
+          TR=$(jq '.translationStats.totalTranslated // 0' output/news-data.json 2>/dev/null || echo N/A)
+          FA=$(jq '[.news[]|select(.translationError==true)]|length' output/news-data.json 2>/dev/null || echo N/A)
+          echo "## Report" >> $GITHUB_STEP_SUMMARY
+          echo "| item | value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| total | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+          echo "| translated | $TR |" >> $GITHUB_STEP_SUMMARY
+          echo "| failed | $FA |" >> $GITHUB_STEP_SUMMARY
+
+      - name: commit
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add output/news-data.json || true
+          if git diff --staged --quiet; then echo "no changes"; else
+            git commit -m "Update news $(date '+%Y%m%d-%H%M%S')"
+            for i in 1 2 3; do
+              if git push origin HEAD:main; then break; fi
+              git pull --rebase origin main
+              sleep 3
+            done
+          fi
+
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: news-${{ github.run_id }}
+          path: output/
+          retention-days: 3

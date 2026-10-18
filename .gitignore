@@ -1,5 +1,11 @@
 node_modules/
 output/news-data-temp.json
+build/
+dist/
+web/
+__pycache__/
+*.pyc
+*.spec
 *.log
 .DS_Store
 .env

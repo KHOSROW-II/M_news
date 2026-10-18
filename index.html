@@ -3,31 +3,36 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>📰 خبرخوان خودکار | ترجمه هوشمند</title>
+    <title>News</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="app">
-        <header>
-            <h1>📡 خبرخوان چندمنبعی</h1>
-            <p>جمع‌آوری خودکار از ۳ منبع + ترجمه واقعی غیرفارسی</p>
-            <div class="status" id="status"></div>
-        </header>
-        
-        <div class="controls">
-            <input type="text" id="search" placeholder="جستجو در اخبار..." class="search-input">
-            <div class="filters" id="filters"></div>
+        <div class="topbar">
+            <div class="brand">News</div>
+            <div class="topbar-actions">
+                <input type="text" id="search" class="search" placeholder="Search...">
+                <button id="langBtn" class="btn" type="button">Original</button>
+                <button id="refreshBtn" class="btn" type="button">Refresh</button>
+            </div>
         </div>
-        
-        <div class="news-container" id="newsContainer">
-            <div class="loading">در حال بارگذاری...</div>
-        </div>
-        
-        <footer>
-            <p>⚠️ اخبار با 🌐 مشخص شده‌اند با <strong>ترجمه ماشینی</strong> برگردانده شده‌اند</p>
-            <p>منابع: C14 (عبری) | ایران اینترنشنال (فارسی) | رضا پهلوی (انگلیسی)</p>
-        </footer>
+
+        <div class="filters" id="filters"></div>
+
+        <main class="main">
+            <div class="grid" id="grid">
+                <div class="loading">Loading...</div>
+            </div>
+        </main>
     </div>
+
+    <div id="reader" class="reader" hidden>
+        <div class="reader-window">
+            <button class="reader-close" id="readerClose" type="button">&times;</button>
+            <div id="readerContent"></div>
+        </div>
+    </div>
+
     <script src="script.js"></script>
 </body>
 </html>

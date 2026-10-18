@@ -1,11 +1,15 @@
 {
   "name": "news-aggregator-workflow",
-  "version": "2.0.0",
-  "description": "GitHub Actions based news aggregator with real translation",
+  "version": "3.0.0",
+  "description": "News aggregator with RSS, full-content extraction, translation and desktop app",
   "scripts": {
-    "fetch": "node scripts/fetch-news.js",
-    "translate": "node scripts/translate-service.js",
-    "full": "npm run fetch && npm run translate"
+    "f": "node scripts/fetch-news.js",
+    "t": "node scripts/translate-service.js",
+    "a": "npm run f && npm run t"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "fast-xml-parser": "^4.5.0"
   },
   "engines": {
     "node": ">=20.0.0"

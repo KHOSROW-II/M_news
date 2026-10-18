@@ -1,9 +1,18 @@
+const CONFIG = {
+    refreshIntervalMs: 60000,
+};
+
 let allNews = [];
 let currentSource = 'all';
 let currentSearch = '';
+let showOriginal = false;
+let lastKnownTimestamp = null;
+const cardMode = new Map(); // id -> 'translated' | 'original'
 
-function escapeHtml(text) {
-    return String(text ?? '')
+const $ = (id) => document.getElementById(id);
+
+function escapeHtml(t) {
+    return String(t ?? '')
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
@@ -11,142 +20,286 @@ function escapeHtml(text) {
         .replace(/'/g, '&#39;');
 }
 
-async function loadNews() {
+function timeAgo(iso) {
+    if (!iso) return '';
+    const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (diff < 60) return 'now';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h';
+    return Math.floor(diff / 86400) + 'd';
+}
+
+function getMode(item) {
+    if (cardMode.has(item.id)) return cardMode.get(item.id);
+    return showOriginal ? 'original' : 'translated';
+}
+
+function shouldShowToggle(item) {
+    return item.needsTranslation && (item.translated || item.translationError);
+}
+
+function textFor(item, field, useOriginal) {
+    const translated = item[field];
+    const original = item[field + 'Original'];
+    if (useOriginal) return original || translated || '';
+    return translated || original || '';
+}
+
+/* ---------- data ---------- */
+async function loadData() {
     try {
-        const response = await fetch('output/news-data.json?t=' + Date.now());
-        if (!response.ok) throw new Error('فایل پیدا نشد');
-        const data = await response.json();
-
+        const res = await fetch('output/news-data.json?t=' + Date.now());
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
         allNews = Array.isArray(data.news) ? data.news : [];
-
-        displayStats(data);
-        renderFilters();
-        renderNews();
-
-        const totalTranslated = data.translationStats?.totalTranslated ?? 0;
-        const totalFailed = data.translationStats?.totalFailed ?? 0;
-        const lastUpdated = data.lastUpdated
-            ? new Date(data.lastUpdated).toLocaleString('fa-IR')
-            : 'نامشخص';
-
-        let statusHtml = `✅ آخرین بروزرسانی: ${lastUpdated} | 📊 ${totalTranslated} خبر ترجمه شده`;
-        if (totalFailed > 0) {
-            statusHtml += ` | ⚠️ ${totalFailed} ترجمهٔ ناموفق`;
-        }
-        if (data.translationStats?.fallback) {
-            statusHtml += ' | 🛟 حالت fallback (بدون ترجمه)';
-        }
-        document.getElementById('status').innerHTML = statusHtml;
-    } catch (error) {
-        console.error('Load error:', error);
-        document.getElementById('newsContainer').innerHTML = `
-            <div class="loading" style="color:red;">
-                ❌ خطا در بارگذاری اخبار<br>
-                <small>لطفاً فایل output/news-data.json را بررسی کنید</small>
-            </div>
-        `;
+        lastKnownTimestamp = data.lastUpdated || null;
+        render();
+        updateStatusBar(data);
+    } catch (err) {
+        console.error('load:', err);
+        $('grid').innerHTML = '<div class="loading">Failed to load news</div>';
     }
+}
+
+function updateStatusBar(data) {
+    // no visible status bar in this minimal layout; log only
+    console.log('[status]', data.lastUpdated, data.translationStats);
+}
+
+/* ---------- render ---------- */
+function render() {
+    renderFilters();
+    renderGrid();
 }
 
 function renderFilters() {
     const sources = {};
-    allNews.forEach(news => {
-        if (news?.sourceId && news?.sourceName) {
-            sources[news.sourceId] = news.sourceName;
-        }
-    });
+    for (const n of allNews) if (n.sourceId) sources[n.sourceId] = n.sourceName;
 
-    const filtersDiv = document.getElementById('filters');
-    filtersDiv.innerHTML = `
-        <button class="filter-btn ${currentSource === 'all' ? 'active' : ''}" data-source="all">📰 همه</button>
-        ${Object.entries(sources).map(([id, name]) => `
-            <button class="filter-btn ${currentSource === id ? 'active' : ''}" data-source="${escapeHtml(id)}">${escapeHtml(name)}</button>
-        `).join('')}
-    `;
-
-    document.querySelectorAll('.filter-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            currentSource = btn.dataset.source;
-            renderFilters();
-            renderNews();
-        });
-    });
+    const html = [
+        `<button class="chip ${currentSource === 'all' ? 'active' : ''}" data-source="all" type="button">All</button>`,
+        ...Object.entries(sources).map(([id, name]) =>
+            `<button class="chip ${currentSource === id ? 'active' : ''}" data-source="${escapeHtml(id)}" type="button">${escapeHtml(name)}</button>`),
+    ].join('');
+    $('filters').innerHTML = html;
 }
 
-function renderNews() {
-    let filtered = allNews.filter(news => {
-        if (!news) return false;
-        if (currentSource !== 'all' && news.sourceId !== currentSource) return false;
+function getFiltered() {
+    return allNews.filter(n => {
+        if (!n) return false;
+        if (currentSource !== 'all' && n.sourceId !== currentSource) return false;
         if (currentSearch) {
-            const haystack = `${news.title || ''} ${news.summary || ''} ${news.originalTitle || ''}`;
-            if (!haystack.includes(currentSearch)) return false;
+            const hay = `${n.title || ''} ${n.titleOriginal || ''} ${n.summary || ''}`.toLowerCase();
+            if (!hay.includes(currentSearch.toLowerCase())) return false;
         }
         return true;
     });
+}
 
-    const container = document.getElementById('newsContainer');
-
-    if (filtered.length === 0) {
-        container.innerHTML = '<div class="loading">📭 خبری یافت نشد</div>';
+function renderGrid() {
+    const list = getFiltered();
+    if (!list.length) {
+        $('grid').innerHTML = '<div class="loading">No stories found</div>';
         return;
     }
+    $('grid').innerHTML = list.map(renderCard).join('');
+}
 
-    container.innerHTML = filtered.map(news => {
-        const timeStr = news.pubDate
-            ? new Date(news.pubDate).toLocaleTimeString('fa-IR')
-            : '—';
+function renderCard(item) {
+    const useOriginal = getMode(item) === 'original';
+    const title = textFor(item, 'title', useOriginal);
+    const summary = textFor(item, 'summary', useOriginal);
+    const showToggle = shouldShowToggle(item);
+    const toggleLabel = useOriginal ? 'Show Persian' : 'Show original';
+    const langLabel = (item.originalLang || '').toUpperCase();
 
-        const translatedBadge = news.translated
-            ? '<span class="translated-badge">🌐 ترجمه ماشینی</span>'
-            : '';
-        const errorBadge = news.translationError
-            ? '<span class="failed-badge">⚠️ ترجمه ناموفق</span>'
-            : '';
-        const translationNote = news.translated
-            ? `<div class="translation-note">⚠️ این خبر از زبان ${escapeHtml(news.originalLang || '?')} ترجمه شده است</div>`
-            : (news.translationError
-                ? `<div class="translation-note" style="color:#e53935;">⚠️ ترجمه انجام نشد — متن اصلی نمایش داده می‌شود</div>`
-                : '');
+    const img = item.image
+        ? `<img class="card-image" src="${escapeHtml(item.image)}" alt="" loading="lazy" onerror="this.style.display='none'">`
+        : '<div class="card-image empty"></div>';
 
-        return `
-            <div class="news-card" data-link="${escapeHtml(news.link || '')}">
-                <div class="card-header">
-                    <span class="source">${escapeHtml(news.sourceName || 'منبع')}</span>
-                    <div style="display:flex; gap:6px;">${translatedBadge}${errorBadge}</div>
+    const footer = showToggle ? `
+        <div class="card-footer">
+            <span class="card-lang">${escapeHtml(langLabel)}</span>
+            <button class="card-toggle ${useOriginal ? 'active' : ''}" data-toggle="1" type="button">${toggleLabel}</button>
+        </div>` : '';
+
+    return `
+        <article class="card" data-id="${escapeHtml(item.id)}">
+            ${img}
+            <div class="card-body">
+                <div class="card-meta">
+                    <span class="source">${escapeHtml(item.sourceName || '')}</span>
+                    <span class="card-time">${timeAgo(item.pubDate)}</span>
                 </div>
-                <h3 class="news-title">${escapeHtml(news.title || '')}</h3>
-                <p class="news-summary">${escapeHtml(news.summary || '')}</p>
-                <div class="news-footer">
-                    <span>🕒 ${timeStr}</span>
-                    <span>${news.link ? '🔗 کلیک برای مشاهده منبع' : 'بدون لینک'}</span>
-                </div>
-                ${translationNote}
+                <h3 class="card-title">${escapeHtml(title)}</h3>
+                <p class="card-summary">${escapeHtml(summary)}</p>
+                ${footer}
             </div>
-        `;
-    }).join('');
+        </article>
+    `;
+}
 
-    // event listener به‌جای onclick inline
-    container.querySelectorAll('.news-card').forEach(card => {
-        const link = card.dataset.link;
-        if (link) {
-            card.addEventListener('click', () => {
-                window.open(link, '_blank', 'noopener,noreferrer');
-            });
+/* ---------- interactions ---------- */
+function toggleCard(id) {
+    const item = allNews.find(n => n.id === id);
+    if (!item) return;
+    const current = getMode(item);
+    cardMode.set(id, current === 'original' ? 'translated' : 'original');
+    renderGrid();
+}
+
+function toggleGlobal() {
+    showOriginal = !showOriginal;
+    cardMode.clear();
+    const btn = $('langBtn');
+    btn.textContent = showOriginal ? 'Persian' : 'Original';
+    btn.classList.toggle('active', showOriginal);
+    renderGrid();
+}
+
+/* ---------- reader ---------- */
+function openReader(item) {
+    const useOriginal = getMode(item) === 'original';
+    const title = textFor(item, 'title', useOriginal);
+    const content = textFor(item, 'content', useOriginal);
+    const showToggle = shouldShowToggle(item);
+
+    const paragraphs = splitParagraphs(content);
+
+    const toggleBtn = showToggle ? `
+        <button class="btn ${useOriginal ? 'active' : ''}" id="readerToggle" type="button">
+            ${useOriginal ? 'Show Persian' : 'Show original'}
+        </button>
+    ` : '';
+
+    const openBtn = item.link ? `
+        <button class="btn" id="readerOpen" type="button">Open source</button>
+    ` : '';
+
+    $('readerContent').innerHTML = `
+        ${item.image ? `<img class="reader-image" src="${escapeHtml(item.image)}" alt="" onerror="this.style.display='none'">` : ''}
+        <div class="reader-body">
+            <div class="reader-source">${escapeHtml(item.sourceName || '')} · ${escapeHtml((item.originalLang || '').toUpperCase())}</div>
+            <h2 class="reader-title">${escapeHtml(title)}</h2>
+            <div class="reader-text">
+                ${paragraphs.map(p => `<p>${escapeHtml(p)}</p>`).join('')}
+            </div>
+        </div>
+        <div class="reader-actions">
+            ${toggleBtn}
+            ${openBtn}
+        </div>
+    `;
+
+    $('reader').hidden = false;
+    document.body.style.overflow = 'hidden';
+
+    if (showToggle) {
+        $('readerToggle').addEventListener('click', () => {
+            toggleCard(item.id);
+            closeReader();
+            openReader(item);
+        });
+    }
+    if (item.link) {
+        $('readerOpen').addEventListener('click', () => {
+            window.open(item.link, '_blank', 'noopener,noreferrer');
+        });
+    }
+}
+
+function splitParagraphs(text) {
+    if (!text) return [];
+    const blocks = text.split(/\n{2,}/).map(t => t.trim()).filter(Boolean);
+    if (blocks.length > 1) return blocks;
+    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+    const out = [];
+    let buf = '';
+    for (const s of sentences) {
+        if ((buf + s).length > 320) {
+            if (buf) out.push(buf.trim());
+            buf = s;
+        } else buf += s;
+    }
+    if (buf) out.push(buf.trim());
+    return out.length ? out : [text];
+}
+
+function closeReader() {
+    $('reader').hidden = true;
+    document.body.style.overflow = '';
+}
+
+/* ---------- refresh ---------- */
+async function refresh() {
+    const btn = $('refreshBtn');
+    btn.textContent = 'Refreshing...';
+    btn.disabled = true;
+
+    // try desktop API first, then direct fetch
+    try {
+        await fetch('/api/refresh', { cache: 'no-store' }).catch(() => null);
+    } catch (e) { /* ignore */ }
+
+    try {
+        const res = await fetch('output/news-data.json?t=' + Date.now(), { cache: 'no-store' });
+        if (res.ok) {
+            const data = await res.json();
+            if (data.lastUpdated !== lastKnownTimestamp) {
+                allNews = Array.isArray(data.news) ? data.news : [];
+                lastKnownTimestamp = data.lastUpdated;
+                cardMode.clear();
+                render();
+            }
         }
+    } catch (e) {
+        console.error('refresh:', e);
+    }
+
+    btn.textContent = 'Refresh';
+    btn.disabled = false;
+}
+
+/* ---------- init ---------- */
+function init() {
+    $('filters').addEventListener('click', (e) => {
+        const chip = e.target.closest('.chip');
+        if (!chip) return;
+        currentSource = chip.dataset.source;
+        render();
     });
-}
 
-function displayStats(data) {
-    console.log('📊 Statistics:', data.stats);
-}
+    $('grid').addEventListener('click', (e) => {
+        const toggle = e.target.closest('[data-toggle]');
+        const card = e.target.closest('.card');
+        if (!card) return;
+        const id = card.dataset.id;
+        if (toggle) {
+            e.stopPropagation();
+            toggleCard(id);
+            return;
+        }
+        const item = allNews.find(n => n.id === id);
+        if (item) openReader(item);
+    });
 
-const searchInput = document.getElementById('search');
-if (searchInput) {
-    searchInput.addEventListener('input', (e) => {
+    $('search').addEventListener('input', (e) => {
         currentSearch = e.target.value;
-        renderNews();
+        renderGrid();
     });
+
+    $('langBtn').addEventListener('click', toggleGlobal);
+    $('refreshBtn').addEventListener('click', refresh);
+    $('readerClose').addEventListener('click', closeReader);
+    $('reader').addEventListener('click', (e) => {
+        if (e.target === $('reader')) closeReader();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !$('reader').hidden) closeReader();
+    });
+
+    loadData();
+    setInterval(refresh, CONFIG.refreshIntervalMs);
 }
 
-loadNews();
-setInterval(() => loadNews(), 60000);
+document.addEventListener('DOMContentLoaded', init);
